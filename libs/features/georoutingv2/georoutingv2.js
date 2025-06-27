@@ -1,4 +1,6 @@
-import { getFederatedContentRoot } from '../../utils/federated.js';
+import { getFederatedContentRoot } from '../../utils/utils.js';
+
+const OLD_GEOROUTING = 'oldgeorouting';
 
 let config;
 let createTag;
@@ -37,9 +39,12 @@ export const getCookie = (name) => document.cookie
   .find((row) => row.startsWith(`${name}=`))
   ?.split('=')[1];
 
-const getAkamaiCode = () => new Promise((resolve, reject) => {
-  const urlParams = new URLSearchParams(window.location.search);
-  const akamaiLocale = urlParams.get('akamaiLocale') || sessionStorage.getItem('akamai');
+export const getAkamaiCode = (checkedParams = false) => new Promise((resolve, reject) => {
+  let akamaiLocale = null;
+  if (!checkedParams) {
+    const urlParams = new URLSearchParams(window.location.search);
+    akamaiLocale = urlParams.get('akamaiLocale') || sessionStorage.getItem('akamai');
+  }
   if (akamaiLocale !== null) {
     resolve(akamaiLocale.toLowerCase());
   } else {
@@ -228,13 +233,7 @@ function buildContent(currentPage, locale, geoData, locales) {
 async function getDetails(currentPage, localeMatches, geoData) {
   const availableLocales = await getAvailableLocales(localeMatches);
   if (!availableLocales.length) return null;
-  const { innerWidth } = window;
-  let svgDiv = null;
-  if (innerWidth < 480) {
-    const { default: getMobileBg } = await import('./getMobileBg.js');
-    svgDiv = createTag('div', { class: 'georouting-bg' }, getMobileBg());
-  }
-  const georoutingWrapper = createTag('div', { class: 'georouting-wrapper fragment', style: 'display:none;' }, svgDiv);
+  const georoutingWrapper = createTag('div', { class: 'georouting-wrapper fragment' });
   currentPage.url = window.location.hash ? document.location.href : '#';
   if (availableLocales.length === 1) {
     const content = buildContent(currentPage, availableLocales[0], geoData);
@@ -257,14 +256,16 @@ async function showModal(details) {
   const { miloLibs, codeRoot } = config;
 
   const tabs = details.querySelector('.tabs');
+  const sectionMetaPath = `${miloLibs || codeRoot}/blocks/section-metadata/section-metadata.css`;
+  const georoutingPath = `${miloLibs || codeRoot}/features/georoutingv2/georoutingv2.css`;
   const promises = [
     tabs ? loadBlock(tabs) : null,
-    tabs ? loadStyle(`${miloLibs || codeRoot}/blocks/section-metadata/section-metadata.css`) : null,
-    new Promise((resolve) => { loadStyle(`${miloLibs || codeRoot}/features/georoutingv2/georoutingv2.css`, resolve); }),
+    tabs ? new Promise((resolve) => { loadStyle(sectionMetaPath, resolve); }) : null,
+    new Promise((resolve) => { loadStyle(georoutingPath, resolve); }),
+    import('../../blocks/modal/modal.js'),
   ];
-  await Promise.all(promises);
-  // eslint-disable-next-line import/no-cycle
-  const { getModal, sendAnalytics } = await import('../../blocks/modal/modal.js');
+  const result = await Promise.all(promises);
+  const { getModal, sendAnalytics } = result[3];
   sendAnalyticsFunc = sendAnalytics;
   return getModal(null, { class: 'locale-modal-v2', id: 'locale-modal-v2', content: details, closeEvent: 'closeModal' });
 }
@@ -275,6 +276,7 @@ export default async function loadGeoRouting(
   getMetadataFunc,
   loadBlockFunc,
   loadStyleFunc,
+  v2jsonPromise = null,
 ) {
   if (getGeoroutingOverride()) return;
   config = conf;
@@ -283,25 +285,25 @@ export default async function loadGeoRouting(
   loadBlock = loadBlockFunc;
   loadStyle = loadStyleFunc;
 
-  const urls = [
-    `${config.contentRoot ?? ''}/georoutingv2.json`,
-    `${config.contentRoot ?? ''}/georouting.json`,
-    `${getFederatedContentRoot()}/federal/georouting/georoutingv2.json`,
-  ];
-  let resp;
-  for (const url of urls) {
-    resp = await fetch(url);
-    if (resp.ok) {
-      if (url.includes('georouting.json')) {
-        const json = await resp.json();
-        // eslint-disable-next-line import/no-cycle
-        const { default: loadGeoRoutingOld } = await import('../georouting/georouting.js');
-        loadGeoRoutingOld(config, createTag, getMetadata, json);
-      }
-      break;
-    }
-  }
-  const json = await resp.json();
+  const v2JSON = (v2jsonPromise ?? import(`${conf.contentRoot ?? ''}/georoutingv2.json`))
+    .then((r) => r.json())
+    .catch(() => null);
+  const loadOldGeorouting = async (json) => {
+    const { default: loadGeoRoutingOld } = await import('../georouting/georouting.js');
+    await loadGeoRoutingOld(config, createTag, getMetadata, json);
+    return OLD_GEOROUTING;
+  };
+  const oldGeorouting = () => fetch(`${config.contentRoot ?? ''}/georouting.json`)
+    .then((r) => r.json())
+    .then(loadOldGeorouting)
+    .catch(() => null);
+  const federatedJSON = () => fetch(`${getFederatedContentRoot()}/federal/georouting/georoutingv2.json`)
+    .then((r) => r.json())
+    .catch(() => null);
+
+  const json = (await v2JSON) ?? (await oldGeorouting()) ?? (await federatedJSON());
+  if (json === OLD_GEOROUTING) return;
+
   const { locale } = config;
 
   const urlLocale = locale.prefix.replace('/', '');

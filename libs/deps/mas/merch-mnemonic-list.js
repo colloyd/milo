@@ -1,10 +1,13 @@
-import{html as e,css as i,LitElement as s}from"/libs/deps/lit-all.min.js";var t=class extends s{static styles=i`
+var o=Object.defineProperty;var r=(e,t,i)=>t in e?o(e,t,{enumerable:!0,configurable:!0,writable:!0,value:i}):e[t]=i;var n=(e,t,i)=>r(e,typeof t!="symbol"?t+"":t,i);import{html as l,css as p,LitElement as a}from"../lit-all.min.js";var s=class extends a{constructor(){super()}render(){return l`
+            <slot name="icon"></slot>
+            <slot name="description">${this.description}</slot>
+        `}};n(s,"styles",p`
         :host {
             display: flex;
-            flex-direction: row;
-            gap: 10px;
-            margin-bottom: 10px;
-            align-items: flex-end;
+            flex-wrap: nowrap;
+            gap: 8px;
+            margin-right: 16px;
+            align-items: center;
         }
 
         ::slotted([slot='icon']) {
@@ -23,8 +26,4 @@ import{html as e,css as i,LitElement as s}from"/libs/deps/lit-all.min.js";var t=
         :host .hidden {
             display: none;
         }
-    `;static properties={description:{type:String,attribute:!0}};constructor(){super()}render(){return e`
-            <slot name="icon"></slot>
-            <slot name="description">${this.description}</slot>
-        `}};customElements.define("merch-mnemonic-list",t);export{t as MerchMnemonicList};
-//# sourceMappingURL=merch-mnemonic-list.js.map
+    `),n(s,"properties",{description:{type:String,attribute:!0}});customElements.define("merch-mnemonic-list",s);export{s as MerchMnemonicList};

@@ -1,10 +1,12 @@
 import { readFile } from '@web/test-runner-commands';
 import { expect } from '@esm-bundle/chai';
+import sinon, { stub } from 'sinon';
 import { delay } from '../../helpers/waitfor.js';
-import { setConfig } from '../../../libs/utils/utils.js';
-import init, { setPreferences, decorateURL } from '../../../libs/blocks/marketo/marketo.js';
+import { setConfig, MILO_EVENTS } from '../../../libs/utils/utils.js';
+import init, { setPreferences, decorateURL, FORM_PARAM } from '../../../libs/blocks/marketo/marketo.js';
 
 const innerHTML = await readFile({ path: './mocks/body.html' });
+window.lana = { log: stub() };
 
 describe('marketo', () => {
   beforeEach(() => {
@@ -102,5 +104,70 @@ describe('marketo decorateURL', () => {
     const baseURL = new URL('https://business.adobe.com/marketo-block.html');
     const result = decorateURL('Thank you for submitting the form', baseURL);
     expect(result).to.be.null;
+  });
+});
+
+const onePage = await readFile({ path: './mocks/one-page-experience.html' });
+
+describe('Marketo ungated one page experience', () => {
+  let url;
+  let clock;
+
+  beforeEach(() => {
+    url = new URL(window.location);
+    url.searchParams.set(FORM_PARAM, 'off');
+    window.history.pushState({}, '', url);
+    document.body.innerHTML = onePage;
+    clock = sinon.useFakeTimers();
+  });
+
+  afterEach(() => {
+    url.searchParams.delete(FORM_PARAM);
+    window.history.pushState({}, '', url);
+    clock.restore();
+  });
+
+  it('shows success section', () => {
+    init(document.querySelector('.marketo'));
+    expect(document.querySelector('.section.form-success').classList.contains('hide-block')).to.be.false;
+  });
+
+  it('shows success section that appears after marketo', () => {
+    document.querySelector('#success-section').classList.remove('form-success');
+    init(document.querySelector('.marketo'));
+    expect(document.querySelector('#success-section').classList.contains('hide-block')).to.be.true;
+    document.querySelector('#success-section').classList.add('form-success');
+    document.dispatchEvent(new Event(MILO_EVENTS.DEFERRED));
+    clock.tick(500);
+    expect(document.querySelector('#success-section').classList.contains('hide-block')).to.be.false;
+  });
+
+  it('hides success hide section that appears after marketo', () => {
+    document.querySelector('#success-hide-section').classList.remove('form-success-hide');
+    init(document.querySelector('.marketo'));
+    expect(document.querySelector('#success-hide-section').classList.contains('hide-block')).to.be.false;
+    document.querySelector('#success-hide-section').classList.add('form-success-hide');
+    document.dispatchEvent(new Event(MILO_EVENTS.DEFERRED));
+    clock.tick(500);
+    expect(document.querySelector('#success-hide-section').classList.contains('hide-block')).to.be.true;
+  });
+
+  it('logs error if success section is not provided', () => {
+    document.querySelector('#success-data').remove();
+    document.querySelector('#success-hide-data').remove();
+    init(document.querySelector('.marketo'));
+    expect(window.lana.log.args[0][0]).to.equal('Error showing Marketo success section');
+    expect(window.lana.log.args[1][0]).to.equal('Error hiding Marketo success section');
+  });
+
+  it('logs error if success section does not toggle after maximum intervals', () => {
+    document.querySelector('#success-section').classList.remove('form-success');
+    document.querySelector('#success-hide-section').classList.remove('form-success-hide');
+    init(document.querySelector('.marketo'));
+    expect(document.querySelector('#success-section').classList.contains('hide-block')).to.be.true;
+    expect(document.querySelector('#success-hide-section').classList.contains('hide-block')).to.be.false;
+    clock.runAll();
+    expect(window.lana.log.args[0][0]).to.equal('Error showing Marketo success section');
+    expect(window.lana.log.args[1][0]).to.equal('Error hiding Marketo success section');
   });
 });

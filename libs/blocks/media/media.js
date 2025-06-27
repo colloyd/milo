@@ -1,6 +1,13 @@
 /* media - consonant v6 */
 
-import { decorateBlockBg, decorateBlockText, getBlockSize, decorateTextOverrides, applyHoverPlay } from '../../utils/decorate.js';
+import {
+  decorateBlockBg,
+  decorateBlockText,
+  getBlockSize,
+  decorateTextOverrides,
+  applyHoverPlay,
+  loadCDT,
+} from '../../utils/decorate.js';
 import { createTag, loadStyle, getConfig } from '../../utils/utils.js';
 
 const blockTypeSizes = {
@@ -23,17 +30,23 @@ function decorateAvatar(el) {
 function decorateQr(el) {
   const text = el.querySelector('.text');
   if (!text) return;
-  const appStore = text.children[(text.children.length - 1)];
-  const googlePlay = text.children[(text.children.length - 2)];
+  const appStore = text.children[(text.children.length - 1)]?.querySelector('a');
+  const googlePlay = text.children[(text.children.length - 2)]?.querySelector('a');
   const qrImage = text.children[(text.children.length - 3)];
+  if (!qrImage || !appStore || !googlePlay) return;
+  [appStore, googlePlay].forEach(({ parentElement }) => {
+    parentElement.classList.add('qr-button-container');
+  });
+  qrImage.classList.add('qr-code-img');
   appStore.classList.add('app-store');
   appStore.textContent = '';
+  appStore.setAttribute('aria-label', 'Apple App Store');
   googlePlay.classList.add('google-play');
   googlePlay.textContent = '';
-  qrImage.classList.add('qr-code-img');
+  googlePlay.setAttribute('aria-label', 'Google Play Store');
 }
 
-export default function init(el) {
+export default async function init(el) {
   if (el.className.includes('rounded-corners')) {
     const { miloLibs, codeRoot } = getConfig();
     const base = miloLibs || codeRoot;
@@ -48,7 +61,7 @@ export default function init(el) {
     rows = tail;
   }
   let blockType = null;
-  const types = ['merch', 'qr-code'];
+  const types = ['merch', 'qr-code', 'checklist'];
   [...types].forEach((type) => {
     if (!el.classList.contains(type)) return;
     blockType = type;
@@ -66,9 +79,7 @@ export default function init(el) {
       decorateBlockText(text, blockTypeSizes[size], blockType);
     }
     const image = row.querySelector(':scope > div:not([class])');
-    if (image) image.classList.add('image');
-    const img = image?.querySelector(':scope img');
-    if (header && img?.alt === '') img.alt = header.textContent;
+    image?.classList.add('image');
     const imageVideo = image?.querySelector('video');
     if (imageVideo) applyHoverPlay(imageVideo);
 
@@ -105,4 +116,17 @@ export default function init(el) {
   const mediaRowReversed = el.querySelector(':scope > .foreground > .media-row > div').classList.contains('text');
   if (mediaRowReversed) el.classList.add('media-reverse-mobile');
   decorateTextOverrides(el);
+
+  if (el.classList.contains('countdown-timer')) {
+    const textBlock = container.querySelector('.text');
+    if (textBlock) await loadCDT(textBlock, el.classList);
+  }
+
+  const checklistLinks = blockType === 'checklist' ? el.querySelectorAll('li > a') : [];
+  checklistLinks.forEach((link) => {
+    const parent = link.parentElement;
+    const span = createTag('span');
+    span.append(...parent.childNodes);
+    parent.appendChild(span);
+  });
 }

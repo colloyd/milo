@@ -1,10 +1,14 @@
 import { expect } from '@esm-bundle/chai';
 
 import { mockOstDeps, unmockOstDeps } from './mocks/ost-utils.js';
-import { CheckoutWorkflow, CheckoutWorkflowStep } from '../../../libs/deps/mas/commerce.js';
 import { DEFAULT_CTA_TEXT, createLinkMarkup } from '../../../libs/blocks/ost/ost.js';
 
-const { perpM2M } = await fetch('./mocks/wcs-artifacts-mock.json').then((res) => res.json());
+const perpM2M = {
+  offer_id: 'aeb0bf53517d46e89a1b039f859cf573',
+  commitment: 'PERPETUAL',
+  name: 'Stock',
+  planType: 'M2M',
+};
 const defaults = {
   checkoutWorkflow: 'UCv3',
   checkoutWorkflowStep: 'email',
@@ -235,13 +239,6 @@ describe('OST: merch link creation', () => {
       const ctaText = texts.try;
       const link = createLink({ ctaText, promo, type });
       assertLink(link, perpM2M, { osi, promo, type }, ctaText);
-    });
-
-    it('to UCv2 workflow', async () => {
-      const workflow = CheckoutWorkflow.V2;
-      const workflowStep = CheckoutWorkflowStep.CHECKOUT_EMAIL;
-      const link = createLink({ type, workflow, workflowStep });
-      assertLink(link, perpM2M, { osi, type, workflow, workflowStep });
     });
   });
 

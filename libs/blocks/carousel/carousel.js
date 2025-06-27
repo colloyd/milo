@@ -1,10 +1,18 @@
 import { createTag, getConfig, MILO_EVENTS } from '../../utils/utils.js';
+import { decorateAnchorVideo, syncPausePlayIcon } from '../../utils/decorate.js';
 
 const { miloLibs, codeRoot } = getConfig();
 const base = miloLibs || codeRoot;
 
-const ARROW_NEXT_IMG = `<img class="next-icon" alt="Next icon" src="${base}/blocks/carousel/img/arrow.svg" height="10" width="16">`;
-const ARROW_PREVIOUS_IMG = `<img class="previous-icon" alt="Previous icon" src="${base}/blocks/carousel/img/arrow.svg" height="10" width="16">`;
+const ARROW_NEXT_IMG = `<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21">
+<title>Next slide arrow</title>
+<path d="M19.2214 10.8918C19.3516 10.5773 19.3516 10.2226 19.2214 9.90808C19.1562 9.75098 19.0621 9.60895 18.9435 9.49041L12.9241 3.47092C12.4226 2.96819 11.6076 2.96819 11.1061 3.47092C10.604 3.97239 10.604 4.78743 11.1061 5.2889L14.9312 9.11399H2.4314C1.72109 9.11399 1.146 9.69036 1.146 10.4C1.146 11.1097 1.72109 11.6861 2.4314 11.6861H14.9312L11.1061 15.5112C10.604 16.0126 10.604 16.8277 11.1061 17.3291C11.3568 17.5805 11.6863 17.7062 12.0151 17.7062C12.3439 17.7062 12.6733 17.5805 12.9241 17.3291L18.9436 11.3097C19.0622 11.1911 19.1562 11.0491 19.2214 10.8918Z"/>
+</svg>`;
+
+const ARROW_PREVIOUS_IMG = `<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21">
+<title>Previous slide arrow</title>
+<path d="M19.2214 10.8918C19.3516 10.5773 19.3516 10.2226 19.2214 9.90808C19.1562 9.75098 19.0621 9.60895 18.9435 9.49041L12.9241 3.47092C12.4226 2.96819 11.6076 2.96819 11.1061 3.47092C10.604 3.97239 10.604 4.78743 11.1061 5.2889L14.9312 9.11399H2.4314C1.72109 9.11399 1.146 9.69036 1.146 10.4C1.146 11.1097 1.72109 11.6861 2.4314 11.6861H14.9312L11.1061 15.5112C10.604 16.0126 10.604 16.8277 11.1061 17.3291C11.3568 17.5805 11.6863 17.7062 12.0151 17.7062C12.3439 17.7062 12.6733 17.5805 12.9241 17.3291L18.9436 11.3097C19.0622 11.1911 19.1562 11.0491 19.2214 10.8918Z"/>
+</svg>`;
 const LIGHTBOX_ICON = `<img class="expand-icon" alt="Expand carousel to full screen" src="${base}/blocks/carousel/img/expand.svg" height="14" width="20">`;
 const CLOSE_ICON = `<img class="expand-icon" alt="Expand carousel to full screen" src="${base}/blocks/carousel/img/close.svg" height="20" width="20">`;
 
@@ -15,13 +23,14 @@ const KEY_CODES = {
   ARROW_LEFT: 'ArrowLeft',
   ARROW_RIGHT: 'ArrowRight',
 };
+const FOCUSABLE_SELECTOR = 'a, :not(.video-container, .pause-play-wrapper) > video';
 
 function decorateNextPreviousBtns() {
   const previousBtn = createTag(
     'button',
     {
       class: 'carousel-button carousel-previous is-delayed',
-      'aria-label': 'Previous',
+      'aria-label': 'Previous slide',
       'data-toggle': 'previous',
     },
     ARROW_PREVIOUS_IMG,
@@ -31,7 +40,7 @@ function decorateNextPreviousBtns() {
     'button',
     {
       class: 'carousel-button carousel-next is-delayed',
-      'aria-label': 'Next',
+      'aria-label': 'Next slide',
       'data-toggle': 'next',
     },
     ARROW_NEXT_IMG,
@@ -59,23 +68,26 @@ function decorateLightboxButtons() {
   return [expandBtn, closeBtn];
 }
 
-function decorateSlideIndicators(slides) {
+function decorateSlideIndicators(slides, jumpTo) {
   const indicatorDots = [];
 
   for (let i = 0; i < slides.length; i += 1) {
     const li = createTag('li', {
       class: 'carousel-indicator',
-      role: 'tab',
-      tabindex: -1,
       'data-index': i,
-      'aria-selected': false,
-      'aria-labelledby': `Viewing Slide ${i + 1}`,
     });
+
+    if (jumpTo) {
+      li.setAttribute('role', 'tab');
+      li.setAttribute('tabindex', -1);
+      li.setAttribute('aria-selected', false);
+      li.setAttribute('aria-labelledby', `Viewing Slide ${i + 1}`);
+    }
 
     // Set inital active state
     if (i === 0) {
       li.classList.add('active');
-      li.setAttribute('tabindex', 0);
+      if (jumpTo) li.setAttribute('tabindex', 0);
     }
     indicatorDots.push(li);
   }
@@ -130,6 +142,74 @@ function jumpToDirection(activeSlideIndex, jumpToIndex, slideContainer) {
   }
 }
 
+function checkSlideForVideo(activeSlide) {
+  const video = activeSlide.querySelector('video');
+  /* c8 ignore start */
+  if (video?.played.length > 0 && !video?.paused) {
+    video.pause();
+    syncPausePlayIcon(video);
+  }
+  /* c8 ignore end */
+}
+
+// Sets a muliplyer variable, used by CSS, to move the indicator dots.
+function setIndicatorMultiplyer(carouselElements, activeSlideIndicator, event) {
+  const { slides, direction } = carouselElements;
+  const maxViewableIndicators = 6;
+  if (slides.length <= maxViewableIndicators) return;
+
+  const { currentTarget, key } = event;
+  const eventDirection = currentTarget.dataset.toggle || direction;
+  const keyNavDirection = key === KEY_CODES.ARROW_RIGHT || undefined;
+  const multiplyerOffset = (eventDirection === 'next' || eventDirection === 'left')
+    || keyNavDirection ? 4 : 3;
+  const activeSlideIndex = Number(activeSlideIndicator.dataset.index);
+  if (activeSlideIndex > multiplyerOffset && activeSlideIndex <= slides.length) {
+    /*
+      * Stop adding to the multiplyer if it equals the difference
+      * between the slides length and maxViewableIndicators
+    */
+    const multiplyer = activeSlideIndex - multiplyerOffset >= slides.length - maxViewableIndicators
+      ? slides.length - maxViewableIndicators
+      : activeSlideIndex - multiplyerOffset;
+    activeSlideIndicator.parentElement.classList.add('move-indicators');
+    activeSlideIndicator.parentElement.style = `--indicator-multiplyer: ${multiplyer}`;
+  } else {
+    const multiplyer = 0;
+    activeSlideIndicator.parentElement.style = `--indicator-multiplyer: ${multiplyer}`;
+  }
+}
+
+function updateAriaLive(ariaLive, slide) {
+  let text = '';
+  slide.querySelectorAll(':scope > :not(.section-metadata').forEach((el, index) => {
+    text += `${index ? ' ' : ''}${el.textContent.trim()}`;
+  });
+  if (text) {
+    ariaLive.textContent = text;
+  } else {
+    const el = slide.querySelector('img[alt], video[title], iframe[title]');
+    ariaLive.textContent = el?.getAttribute('alt') || el?.getAttribute('title') || '';
+  }
+}
+
+function setAriaHiddenAndTabIndex({ el: block, slides }, activeEl) {
+  const active = activeEl ?? block.querySelector('.carousel-slide.active');
+  const activeIdx = slides.findIndex((el) => el === active);
+  const isWide = window.matchMedia('(min-width: 900px)').matches;
+  const showClass = [...block.classList].find((cls) => cls.startsWith('show-'));
+  const visible = isWide && showClass ? showClass.split('-')[1] : 1;
+  const ordered = activeIdx > 0
+    ? [...slides.slice(activeIdx), ...slides.slice(0, activeIdx)] : slides;
+  ordered.forEach((slide, i) => {
+    const isVisible = i < visible;
+    slide.setAttribute('aria-hidden', !isVisible);
+    slide.querySelectorAll(FOCUSABLE_SELECTOR).forEach((el) => {
+      el.setAttribute('tabindex', isVisible ? 0 : -1);
+    });
+  });
+}
+
 function moveSlides(event, carouselElements, jumpToIndex) {
   const {
     slideContainer,
@@ -138,12 +218,18 @@ function moveSlides(event, carouselElements, jumpToIndex) {
     slideIndicators,
     controlsContainer,
     direction,
+    ariaLive,
+    jumpTo,
   } = carouselElements;
+
+  ariaLive.textContent = '';
 
   let referenceSlide = slideContainer.querySelector('.reference-slide');
   let activeSlide = slideContainer.querySelector('.active');
   let activeSlideIndicator = controlsContainer.querySelector('.active');
   const activeSlideIndex = activeSlideIndicator.dataset.index;
+
+  checkSlideForVideo(activeSlide);
 
   // Track reference slide - last slide initially
   if (!referenceSlide) {
@@ -156,9 +242,8 @@ function moveSlides(event, carouselElements, jumpToIndex) {
   referenceSlide.classList.remove('reference-slide');
   referenceSlide.style.order = null;
   activeSlide.classList.remove('active');
-  activeSlide.querySelectorAll('a').forEach((focusableElement) => { focusableElement.setAttribute('tabindex', -1); });
   activeSlideIndicator.classList.remove('active');
-  activeSlideIndicator.setAttribute('tabindex', -1);
+  if (jumpTo) activeSlideIndicator.setAttribute('tabindex', -1);
 
   /*
    * If indicator dot buttons are clicked update:
@@ -205,26 +290,14 @@ function moveSlides(event, carouselElements, jumpToIndex) {
   referenceSlide.classList.add('reference-slide');
   referenceSlide.style.order = '1';
 
+  updateAriaLive(ariaLive, activeSlide);
+
   // Update active slide and indicator dot attributes
   activeSlide.classList.add('active');
-  const indexOfActive = [...activeSlide.parentElement.children]
-    .findIndex((ele) => activeSlide.isSameNode(ele));
-  const IndexOfShowClass = [...carouselElements.el.classList].findIndex((ele) => ele.includes('show-'));
-  const tempSlides = [...slides.slice(indexOfActive), ...slides.slice(0, indexOfActive)];
-  if (IndexOfShowClass >= 0) {
-    const show = parseInt(carouselElements.el.classList[IndexOfShowClass].split('-')[1], 10);
-    tempSlides.forEach((slide, index) => {
-      let tabIndex = -1;
-      if (index < show) {
-        tabIndex = 0;
-      }
-      slide.querySelectorAll('a').forEach((focusableElement) => { focusableElement.setAttribute('tabindex', tabIndex); });
-    });
-  } else {
-    activeSlide.querySelectorAll('a').forEach((focusableElement) => { focusableElement.setAttribute('tabindex', 0); });
-  }
+  setAriaHiddenAndTabIndex(carouselElements, activeSlide);
   activeSlideIndicator.classList.add('active');
-  activeSlideIndicator.setAttribute('tabindex', 0);
+  if (jumpTo) activeSlideIndicator.setAttribute('tabindex', 0);
+  setIndicatorMultiplyer(carouselElements, activeSlideIndicator, event);
 
   // Loop over all slide siblings to update their order
   for (let i = 2; i <= slides.length; i += 1) {
@@ -238,7 +311,7 @@ function moveSlides(event, carouselElements, jumpToIndex) {
    * JumpToInidex uses a shorter delay that better supports
    * non-linear slide navigation.
   */
-  const slideDelay = jumpToIndex >= 0 ? 10 : 50;
+  const slideDelay = 25;
   slideContainer.classList.remove('is-ready');
   return setTimeout(() => slideContainer.classList.add('is-ready'), slideDelay);
 }
@@ -294,7 +367,7 @@ function mobileSwipeDetect(carouselElements) {
 }
 
 function handleChangingSlides(carouselElements) {
-  const { el, nextPreviousBtns, slideIndicators } = carouselElements;
+  const { el, nextPreviousBtns, slideIndicators, jumpTo } = carouselElements;
 
   // Handle Next/Previous Buttons
   [...nextPreviousBtns].forEach((btn) => {
@@ -309,16 +382,43 @@ function handleChangingSlides(carouselElements) {
       || event.key === KEY_CODES.ARROW_LEFT) { moveSlides(event, carouselElements); }
   });
 
-  // Handle slide indictors
-  [...slideIndicators].forEach((li) => {
-    li.addEventListener('click', (event) => {
-      const jumpToIndex = Number(li.dataset.index);
-      moveSlides(event, carouselElements, jumpToIndex);
+  // Handle slide indictors click
+  if (jumpTo) {
+    [...slideIndicators].forEach((li) => {
+      li.addEventListener('click', (event) => {
+        const jumpToIndex = Number(li.dataset.index);
+        moveSlides(event, carouselElements, jumpToIndex);
+      });
     });
-  });
+  }
 
   // Swipe Events
   mobileSwipeDetect(carouselElements);
+}
+
+function convertMpcMp4(slides) {
+  slides.forEach((slide) => {
+    const a = slide.querySelector('a');
+    if (a?.href.includes('images-tv.adobe')) {
+      decorateAnchorVideo({
+        src: a.href,
+        anchorTag: a,
+      });
+    }
+  });
+}
+
+function readySlides(slides, slideContainer) {
+  slideContainer.classList.add('is-ready');
+  slides.forEach((slide, idx) => {
+    // Set last slide to be first in order and make reference.
+    if (slides.length - 1 === idx) {
+      slide.style.order = 1;
+      slide.classList.add('reference-slide');
+    } else {
+      slide.style.order = idx + 2;
+    }
+  });
 }
 
 export default function init(el) {
@@ -339,13 +439,21 @@ export default function init(el) {
     return rdx;
   }, []);
 
+  const jumpTo = el.classList.contains('jump-to');
   const fragment = new DocumentFragment();
   const nextPreviousBtns = decorateNextPreviousBtns();
-  const slideIndicators = decorateSlideIndicators(slides);
+  const nextPreviousContainer = createTag('div', { class: 'carousel-button-container' });
+  const slideIndicators = decorateSlideIndicators(slides, jumpTo);
   const controlsContainer = createTag('div', { class: 'carousel-controls is-delayed' });
 
+  convertMpcMp4(slides);
   fragment.append(...slides);
   const slideWrapper = createTag('div', { class: 'carousel-wrapper' });
+  const ariaLive = createTag('div', {
+    class: 'aria-live-container',
+    'aria-live': 'polite',
+  });
+  slideWrapper.appendChild(ariaLive);
   const slideContainer = createTag('div', { class: 'carousel-slides' }, fragment);
   const carouselElements = {
     el,
@@ -355,6 +463,8 @@ export default function init(el) {
     slideIndicators,
     controlsContainer,
     direction: undefined,
+    jumpTo,
+    ariaLive,
   };
 
   if (el.classList.contains('lightbox')) {
@@ -364,19 +474,27 @@ export default function init(el) {
   } else {
     slideWrapper.append(slideContainer);
   }
+  /*
+   * Hinting center variant - Set slides order
+   * before moveSlides is called for centering to work.
+  */
+  if (el.classList.contains('hinting-center-mobile')) {
+    readySlides(slides, slideContainer);
+  }
 
   el.textContent = '';
   el.append(slideWrapper);
 
-  const dotsUl = createTag('ul', {
-    class: 'carousel-indicators',
-    role: 'tablist',
-    tabindex: 0,
-  });
+  const dotsUl = createTag('ul', { class: 'carousel-indicators' });
+  if (jumpTo) {
+    dotsUl.setAttribute('role', 'tablist');
+    dotsUl.setAttribute('tabindex', 0);
+  }
+
   dotsUl.append(...slideIndicators);
   controlsContainer.append(dotsUl);
-
-  el.append(...nextPreviousBtns, controlsContainer);
+  nextPreviousContainer.append(...nextPreviousBtns, controlsContainer);
+  el.append(nextPreviousContainer);
 
   function handleDeferredImages() {
     const images = el.querySelectorAll('img[loading="lazy"]');
@@ -388,13 +506,9 @@ export default function init(el) {
   parentArea.addEventListener(MILO_EVENTS.DEFERRED, handleDeferredImages, true);
 
   slides[0].classList.add('active');
-  const IndexOfShowClass = [...el.classList].findIndex((ele) => ele.includes('show-'));
-  let NoOfVisibleSlides = 1;
-  if (IndexOfShowClass >= 0) {
-    NoOfVisibleSlides = parseInt(el.classList[IndexOfShowClass].split('-')[1], 10);
-  }
-  slides.slice(NoOfVisibleSlides).forEach((slide) => slide.querySelectorAll('a').forEach((focusableElement) => { focusableElement.setAttribute('tabindex', -1); }));
   handleChangingSlides(carouselElements);
+  setAriaHiddenAndTabIndex(carouselElements, slides[0]);
+  window.addEventListener('resize', () => setAriaHiddenAndTabIndex(carouselElements));
 
   function handleLateLoadingNavigation() {
     [...el.querySelectorAll('.is-delayed')].forEach((item) => item.classList.remove('is-delayed'));

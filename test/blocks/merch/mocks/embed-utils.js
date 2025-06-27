@@ -23,9 +23,14 @@ export function createTag(tag, attributes, html) {
   return el;
 }
 
+const PAGE_URL = new URL(window.location.href);
+export const SLD = PAGE_URL.hostname.includes('.aem.') ? 'aem' : 'hlx';
+
 export const getConfig = () => config;
 
 export const setConfig = (c) => { config = c; };
+
+export const customFetch = stub();
 
 export const loadArea = stub();
 
@@ -37,4 +42,13 @@ export const getMetadata = stub();
 
 export const localizeLink = stub();
 
+export const loadLink = stub();
+
 export const reloadPage = stub();
+
+/**
+ * TODO: This method will be deprecated and removed in a future version.
+ * @see https://jira.corp.adobe.com/browse/MWPW-173470
+ * @see https://jira.corp.adobe.com/browse/MWPW-174411
+*/
+export const shouldAllowKrTrial = stub();

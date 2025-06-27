@@ -1,3 +1,4 @@
+import userCanPublishPage from '../../tools/utils/publish.js';
 import {
   PROCESS_TYPES,
   getErrorText,
@@ -6,6 +7,7 @@ import {
   frisk,
   isDelete,
   isSuccess,
+  getHost,
 } from './utils.js';
 
 const BASE_URL = 'https://admin.hlx.page';
@@ -39,29 +41,26 @@ const getRequest = (url, process, useBulk = true) => {
   };
 };
 
-const setUserData = (event) => {
-  const processes = event?.detail?.data;
-  if (processes) {
-    const profile = processes.profile ?? null;
-    const permissions = {};
-    PROCESS_TYPES.forEach((key) => {
-      if (key !== 'index') {
-        const process = isLive(key) ? 'live' : 'preview';
-        const userPermissions = processes[process]?.permissions;
-        permissions[key] = {
-          useBulk: frisk(userPermissions, 'list'),
-          canUse: frisk(userPermissions, 'write'),
-        };
-      }
-    });
-    return { profile, permissions };
-  }
-  return null;
+const setUserData = (data) => {
+  if (!data) return null;
+  const { profile } = data;
+  const permissions = {};
+  PROCESS_TYPES.forEach((key) => {
+    if (key !== 'index') {
+      const process = isLive(key) ? 'live' : 'preview';
+      const userPermissions = data[process]?.permissions;
+      permissions[key] = {
+        useBulk: frisk(userPermissions, 'list'),
+        canUse: frisk(userPermissions, 'write'),
+      };
+    }
+  });
+  return { profile, permissions };
 };
 
 const isPushedDown = async () => {
   const callback = () => {
-    const sidekick = document.querySelector('helix-sidekick');
+    const sidekick = document.querySelector('aem-sidekick, helix-sidekick');
     const pushdown = sidekick?.getAttribute('pushdown');
     const bulkPub = document.querySelector('.bulk-publish-v2');
     if (pushdown && !bulkPub.classList.contains('pushdown')) {
@@ -78,15 +77,18 @@ const isPushedDown = async () => {
 
 const authenticate = async (tool = null) => {
   isPushedDown();
-  const setUser = (event) => { tool.user = setUserData(event); };
-  const openSideKick = document.querySelector('helix-sidekick');
+  const setUserV6 = (event) => { tool.user = setUserData(event?.detail?.data); };
+  const setUserV7 = (event) => { tool.user = setUserData(event?.detail); };
+  const openSideKick = document.querySelector('aem-sidekick, helix-sidekick');
   if (openSideKick) {
-    openSideKick.addEventListener('statusfetched', setUser);
+    openSideKick.addEventListener('statusfetched', setUserV6); // sidekick v6
+    openSideKick.addEventListener('status-fetched', setUserV7); // sidekick v7
     /* c8 ignore next 6 */
   } else {
     document.addEventListener('sidekick-ready', () => {
-      const sidekick = document.querySelector('helix-sidekick');
-      sidekick.addEventListener('statusfetched', setUser);
+      const sidekick = document.querySelector('aem-sidekick, helix-sidekick');
+      sidekick.addEventListener('statusfetched', setUserV6); // sidekick v6
+      sidekick.addEventListener('status-fetched', setUserV7); // sidekick v7
     }, { once: true });
   }
 };
@@ -246,9 +248,93 @@ const updateRetry = async ({ queue, urls, process }) => {
   return newQueue;
 };
 
+/* c8 ignore next 13 */
+const stopJob = async (job) => {
+  const { links } = job.result;
+  try {
+    const result = await fetch(links.self, { method: 'DELETE' });
+    if (!result.ok) {
+      throw new Error(getErrorText(result.status), { cause: result.status }, job.origin);
+    }
+    const json = await result.json();
+    return json;
+  } catch (error) {
+    return { status: error.cause };
+  }
+};
+
+const getJobDetails = async (name, topic) => {
+  try {
+    const { hostname } = window.location;
+    const project = getHost(hostname).split('.')[0];
+    const [ref, repo, owner] = project.split('--');
+    const details = `${BASE_URL}/job/${owner}/${repo}/${ref}/${topic}/${name}/details`;
+    const result = await fetch(details);
+    /* c8 ignore next 3 */
+    if (!result.ok) {
+      throw new Error(getErrorText(result.status), { cause: result.status }, origin);
+    }
+    const json = await result.json();
+    return json;
+  /* c8 ignore next 3 */
+  } catch (error) {
+    return { error };
+  }
+};
+
+const getSharedJob = async () => {
+  const params = new URLSearchParams(window.location.search);
+  const share = params.get('share-job');
+  const topic = params.get('share-topic');
+  /* c8 ignore next 1 */
+  if (!share || !topic) return [];
+  const job = await getJobDetails(share, topic);
+  /* c8 ignore next 3 */
+  if (job.error) {
+    return { ...job, share };
+  }
+  return [{
+    origin: `https://${getHost(window.location.hostname)}`,
+    status: job,
+    progress: job.progress,
+    useBulk: true,
+    result: {
+      links: job.links,
+      job,
+    },
+  }];
+};
+
+// publish authentication service
+const getPublishable = async ({ urls, process, user }) => {
+  let publishable = { authorized: [], unauthorized: [] };
+  if (!isLive(process)) {
+    publishable.authorized = urls;
+  } else {
+    const { permissions, profile } = user;
+    const live = { permissions: ['read'] };
+    if (permissions?.publish?.canUse) {
+      live.permissions.push('write');
+    }
+    publishable = await urls.reduce(async (init, url) => {
+      const result = await init;
+      const detail = { webPath: new URL(url).pathname, live, profile };
+      const { canPublish, message } = await userCanPublishPage(detail);
+      if (canPublish) result.authorized.push(url);
+      else result.unauthorized.push({ href: url, message });
+      return result;
+    }, Promise.resolve(publishable));
+  }
+  return publishable;
+};
+
 export {
   authenticate,
+  getPublishable,
   pollJobStatus,
   startJob,
+  stopJob,
+  getJobDetails,
+  getSharedJob,
   updateRetry,
 };

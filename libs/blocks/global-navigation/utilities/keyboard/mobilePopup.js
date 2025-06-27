@@ -6,7 +6,14 @@ import {
   getOpenPopup,
   selectors,
 } from './utils.js';
-import { closeAllDropdowns, logErrorFor, setActiveDropdown } from '../utilities.js';
+import {
+  closeAllDropdowns,
+  removeA11YMobileDropdowns,
+  dropWhile,
+  logErrorFor,
+  setActiveDropdown,
+  takeWhile,
+} from '../utilities.js';
 
 const closeHeadlines = () => {
   const open = [...document.querySelectorAll(`${selectors.headline}[aria-expanded="true"]`)];
@@ -21,7 +28,7 @@ const openHeadline = ({ headline, focus } = {}) => {
     headline.setAttribute('aria-expanded', 'true');
     setActiveDropdown(headline);
     const section = headline.closest(selectors.section)
-      || headline.closest(selectors.column);
+      || headline.closest(selectors.column) || headline.closest(selectors.featuredProducts);
     const items = [...section.querySelectorAll(selectors.popupItems)]
       .filter((el) => isElementVisible(el));
     if (focus === 'first') items[0].focus();
@@ -83,10 +90,12 @@ class Popup {
     setActiveDropdown(focus === 'first' ? popupItems[first] : popupItems[last]);
   }
 
-  mobileArrowUp = ({ prev, curr, element, isFooter }) => {
+  mobileArrowUp = ({ prev, curr, element, isFooter, newNav }) => {
     // Case 1:  Move focus to the previous item
+    const state = getState(element);
+    const { currentSection } = state;
+    const popupItems = newNav && !isFooter ? this.popupItems() : state.popupItems;
     if (prev !== -1 && curr - 1 === prev) {
-      const { currentSection, popupItems } = getState(element);
       popupItems[prev].focus();
       if (currentSection !== getState(element).currentSection) closeHeadlines();
       return;
@@ -94,33 +103,59 @@ class Popup {
 
     // Case 2: No headline + no previous item, move to the main nav
     const { prevHeadline } = getState(element);
-    if (!prevHeadline) {
+    if (!prevHeadline && !newNav && !isFooter) {
       this.focusMainNav(isFooter);
       return;
     }
 
+    if (!prevHeadline && isFooter) {
+      const prevElement = element?.previousElementSibling;
+      const allHeadlines = [...prevElement.querySelectorAll(selectors.headline)];
+      if (allHeadlines.length && allHeadlines[allHeadlines.length - 1]) {
+        closeHeadlines();
+        openHeadline({ headline: allHeadlines[allHeadlines.length - 1], focus: 'last' });
+      }
+      return;
+    }
+
     // Case 3: Open the previous headline
-    openHeadline({ headline: prevHeadline, focus: 'last' });
+    if (newNav && !isFooter) popupItems?.[popupItems.length - 1]?.focus();
+    else openHeadline({ headline: prevHeadline, focus: 'last' });
   };
 
-  mobileArrowDown = ({ next, element, isFooter }) => {
+  mobileArrowDown = ({ next, element, isFooter, newNav }) => {
     // Case 1: Move focus to the next item
+    const state = getState(element);
+    const { currentSection } = state;
+    const popupItems = newNav && !isFooter ? this.popupItems() : state.popupItems;
     if (next !== -1) {
-      const { currentSection, popupItems } = getState(element);
       popupItems[next].focus();
       if (currentSection !== getState(element).currentSection) closeHeadlines();
       return;
     }
     // Case 2: No headline + no next item, move to the main nav
     const { nextHeadline } = getState(element);
-    if (!nextHeadline) {
+    if (!nextHeadline && !newNav && !isFooter) {
       closeHeadlines();
       this.focusMainNavNext(isFooter);
       return;
     }
 
+    if (!nextHeadline && isFooter) {
+      const nextElement = element?.nextElementSibling;
+      const headline = nextElement && nextElement.querySelector('.feds-menu-headline');
+      closeHeadlines();
+      if (headline) {
+        openHeadline({ headline, focus: 'first' });
+      } else {
+        nextElement?.querySelector('a')?.focus();
+      }
+      return;
+    }
+
     // Case 3: Open the next headline
-    openHeadline({ headline: nextHeadline, focus: 'first' });
+    if (newNav && !isFooter) popupItems?.[0]?.focus();
+    else openHeadline({ headline: nextHeadline, focus: 'first' });
   };
 
   focusMainNav = (isFooter) => {
@@ -134,8 +169,36 @@ class Popup {
     this.mainNav.open();
   };
 
+  popupItems = () => {
+    const activePopup = document.querySelector(selectors.activePopup);
+    if (!activePopup) return [];
+    const tabs = [...activePopup.querySelectorAll(selectors.tab)];
+    const activeTab = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true');
+    const anteActiveTab = takeWhile(tabs, (tab) => tab !== activeTab);
+    const postActiveTab = dropWhile(tabs, (tab) => tab !== activeTab).slice(1);
+    const activeLinks = [...activePopup.querySelectorAll(selectors.activeLinks)];
+    const stickyCTA = activePopup.querySelector(selectors.stickyCta);
+    const topBarLinks = activePopup.querySelectorAll(selectors.topBarLinks);
+    const closeIcon = activePopup.querySelector(selectors.closeLink);
+    const breadcrumbLinks = activePopup.querySelectorAll(selectors.breadCrumbItems);
+    return [
+      ...anteActiveTab,
+      activeTab,
+      ...activeLinks,
+      stickyCTA,
+      ...postActiveTab,
+      ...topBarLinks,
+      closeIcon,
+      ...breadcrumbLinks,
+    ].filter(Boolean);
+  };
+
   handleKeyDown = ({ e, element, isFooter }) => {
-    const popupItems = [...element.querySelectorAll(selectors.popupItems)];
+    const newNav = !!document.querySelector('header.new-nav');
+    const isLocalNav = !!document.querySelector('header.local-nav');
+    const popupItems = newNav && !isFooter
+      ? this.popupItems()
+      : [...element.querySelectorAll(selectors.popupItems)];
     const curr = popupItems.findIndex((el) => el === e.target);
     const prev = getPreviousVisibleItemPosition(curr, popupItems);
     const next = getNextVisibleItemPosition(curr, popupItems);
@@ -146,18 +209,25 @@ class Popup {
     switch (e.code) {
       case 'Tab': {
         if (e.shiftKey) {
-          this.mobileArrowUp({ prev, curr, element, isFooter });
+          this.mobileArrowUp({ prev, curr, element, isFooter, newNav });
         } else {
-          this.mobileArrowDown({ curr, next, element, isFooter });
+          this.mobileArrowDown({ curr, next, element, isFooter, newNav });
         }
         break;
       }
       case 'Escape': {
         closeAllDropdowns();
         this.focusMainNav(isFooter);
+        if (newNav && isLocalNav && !isFooter) {
+          removeA11YMobileDropdowns();
+          const toggle = document.querySelector('header.new-nav .feds-toggle');
+          toggle?.click();
+          toggle?.focus();
+        }
         break;
       }
       case 'ArrowLeft': {
+        if (newNav) break;
         const { prevHeadline, nextHeadline } = getState(element);
         const headline = document.dir !== 'rtl' ? prevHeadline : nextHeadline;
         if (!headline) {
@@ -173,10 +243,12 @@ class Popup {
         break;
       }
       case 'ArrowUp': {
+        if (newNav) break;
         this.mobileArrowUp({ prev, curr, element, isFooter });
         break;
       }
       case 'ArrowRight': {
+        if (newNav) break;
         const { prevHeadline, nextHeadline } = getState(element);
         const headline = document.dir !== 'rtl' ? nextHeadline : prevHeadline;
         if (!headline) {
@@ -192,6 +264,7 @@ class Popup {
         break;
       }
       case 'ArrowDown': {
+        if (newNav) break;
         this.mobileArrowDown({ next, element, isFooter });
         break;
       }
@@ -201,23 +274,29 @@ class Popup {
   };
 
   addEventListeners = () => {
-    document.querySelector(selectors.globalNav)
+    document.querySelector(selectors.globalNavTag)
       ?.addEventListener('keydown', (e) => logErrorFor(() => {
+        if (!e.target.closest(selectors.globalNav)) return;
         const element = getOpenPopup();
         if (!e.target.closest(selectors.popup) || !element || this.desktop.matches) return;
         this.handleKeyDown({ e, element, popupEl: element, isFooter: false });
-      }, `popup key failed ${e.code}`, 'errorType=error,module=gnav-keyboard'));
+      }, `popup key failed ${e.code}`, 'gnav-keyboard', 'e'));
 
-    document.querySelector(selectors.globalFooter)
+    document.querySelector(selectors.globalFooterTag)
       ?.addEventListener('keydown', (e) => logErrorFor(() => {
-        const element = e.target.closest(selectors.menuContent);
+        if (!e.target.closest(selectors.globalFooter)) return;
+
+        const element = e.target.closest(selectors.menuContent)
+          || e.target.closest(selectors.featuredProducts);
         if (!element || this.desktop.matches) return;
 
         const firstNavLink = element.querySelector(selectors.popupItems);
         const firstHeadline = element.querySelector(selectors.headline);
         const isFirstNavlink = e.target === firstNavLink;
         const isFirstHeadline = e.target === firstHeadline;
-        const shiftTabOutOfFooter = e.shiftKey && (isFirstNavlink || isFirstHeadline);
+        const shiftTabOutOfFooter = e.shiftKey
+          && (isFirstNavlink || isFirstHeadline)
+          && !e.target.closest(selectors.featuredProducts);
         if (shiftTabOutOfFooter) return;
 
         // special case, the first dropdown needs some special logic to allow opening.
@@ -233,7 +312,7 @@ class Popup {
           element,
           isFooter: true,
         });
-      }, `footer key failed ${e.code}`, 'errorType=error,module=gnav-keyboard'));
+      }, `footer key failed ${e.code}`, 'gnav-keyboard', 'e'));
   };
 }
 

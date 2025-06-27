@@ -13,24 +13,39 @@
 /*
  * Marketo Form
  */
-import { parseEncodedConfig, loadScript, localizeLink, createTag, createIntersectionObserver } from '../../utils/utils.js';
+import {
+  parseEncodedConfig,
+  loadScript,
+  loadLink,
+  localizeLink,
+  createTag,
+  getConfig,
+  createIntersectionObserver,
+  SLD,
+  MILO_EVENTS,
+} from '../../utils/utils.js';
 
-const ROOT_MARGIN = 1000;
+const ROOT_MARGIN = 50;
 const FORM_ID = 'form id';
 const BASE_URL = 'marketo host';
 const MUNCHKIN_ID = 'marketo munckin';
 const SUCCESS_TYPE = 'form.success.type';
 const SUCCESS_CONTENT = 'form.success.content';
 const SUCCESS_SECTION = 'form.success.section';
+const SUCCESS_HIDE_SECTION = 'form.success.hide.section';
 const FORM_MAP = {
   'success-type': SUCCESS_TYPE,
   'destination-type': SUCCESS_TYPE,
   'success-content': SUCCESS_CONTENT,
   'destination-url': SUCCESS_CONTENT,
   'success-section': SUCCESS_SECTION,
+  'success-hide-section': SUCCESS_HIDE_SECTION,
   'co-partner-names': 'program.copartnernames',
   'sfdc-campaign-id': 'program.campaignids.sfdc',
+  'poi-field': 'field_filters.products',
+  'hardcoded-poi': 'program.poi',
 };
+export const FORM_PARAM = 'form';
 
 export const formValidate = (formEl) => {
   formEl.classList.remove('hide-errors');
@@ -44,11 +59,12 @@ export const decorateURL = (destination, baseURL = window.location) => {
     let destinationUrl = new URL(destination, baseURL.origin);
     const { hostname, pathname, search, hash } = destinationUrl;
 
+    /* c8 ignore next 3 */
     if (!hostname) {
       throw new Error('URL does not have a valid host');
     }
 
-    if (destinationUrl.hostname.includes('.hlx.')) {
+    if (destinationUrl.hostname.includes(`.${SLD}.`)) {
       destinationUrl = new URL(`${pathname}${search}${hash}`, baseURL.origin);
     }
 
@@ -61,7 +77,8 @@ export const decorateURL = (destination, baseURL = window.location) => {
 
     return destinationUrl.href;
   } catch (e) {
-    window.lana?.log(`Error with Marketo destination URL: ${destination} ${e.message}`);
+    /* c8 ignore next 4 */
+    window.lana?.log(`Error with Marketo destination URL: ${destination} ${e.message}`, { tags: 'error,marketo' });
   }
 
   return null;
@@ -83,10 +100,76 @@ export const setPreferences = (formData) => {
   Object.entries(formData).forEach(([key, value]) => setPreference(key, value));
 };
 
+const showSuccessSection = (formData) => {
+  const show = async (sections) => {
+    sections.forEach((section) => section.classList.remove('hide-block'));
+    await new Promise((resolve) => { setTimeout(resolve, 300); });
+    const pageTop = document.querySelector('header')?.offsetHeight ?? 0;
+    const targetPosition = sections[0]?.getBoundingClientRect().top ?? 0;
+    const offsetPosition = targetPosition + window.scrollY - pageTop;
+    window.scrollTo(0, offsetPosition);
+  };
+
+  const showClass = formData[SUCCESS_SECTION]?.toLowerCase().replaceAll(' ', '-');
+  if (!showClass) {
+    window.lana?.log('Error showing Marketo success section', { tags: 'warn,marketo' });
+    return;
+  }
+
+  let successSections = document.querySelectorAll(`.section.${showClass}`);
+  show(successSections);
+  document.addEventListener(
+    MILO_EVENTS.DEFERRED,
+    () => {
+      successSections = document.querySelectorAll(`.section.${showClass}`);
+      show(successSections);
+      /* c8 ignore next 3 */
+      if (!document.querySelector(`.section.${showClass}`)) {
+        window.lana?.log(`Error showing Marketo success section ${showClass}`, { tags: 'warn,marketo' });
+      }
+    },
+    false,
+  );
+};
+
+const hideSuccessSection = (formData) => {
+  const hide = (sections) => {
+    sections.forEach((section) => section.classList.add('hide-block'));
+  };
+
+  const hideClass = formData[SUCCESS_HIDE_SECTION]?.toLowerCase().replaceAll(' ', '-');
+  if (!hideClass) {
+    window.lana?.log('Error hiding Marketo success section', { tags: 'warn,marketo' });
+    return;
+  }
+
+  let hideSections = document.querySelectorAll(`.section.${hideClass}`);
+  hide(hideSections);
+  document.addEventListener(
+    MILO_EVENTS.DEFERRED,
+    () => {
+      hideSections = document.querySelectorAll(`.section.${hideClass}`);
+      hide(hideSections);
+      /* c8 ignore next 3 */
+      if (!document.querySelector(`.section.${hideClass}`)) {
+        window.lana?.log(`Error hiding Marketo success section ${hideClass}`, { tags: 'warn,marketo' });
+      }
+    },
+    false,
+  );
+};
+
+const toggleSuccessSection = (formData) => {
+  showSuccessSection(formData);
+  hideSuccessSection(formData);
+};
+
 export const formSuccess = (formEl, formData) => {
+  const el = formEl.closest('.marketo');
   const parentModal = formEl?.closest('.dialog-modal');
   const mktoSubmit = new Event('mktoSubmit');
 
+  el.classList.add('success');
   window.dispatchEvent(mktoSubmit);
   window.mktoSubmitted = true;
 
@@ -98,24 +181,16 @@ export const formSuccess = (formEl, formData) => {
   }
 
   if (formData?.[SUCCESS_TYPE] !== 'section') return true;
-
-  try {
-    const section = formData[SUCCESS_SECTION].toLowerCase().replaceAll(' ', '-');
-    const success = document.querySelector(`.section.${section}`);
-    success.classList.remove('hide-block');
-    success.scrollIntoView({ behavior: 'smooth' });
-    setPreference(SUCCESS_TYPE, 'message');
-  } catch (e) {
-    /* c8 ignore next 2 */
-    window.lana?.log('Error showing Marketo success section', { tags: 'errorType=warn,module=marketo' });
-  }
-
+  toggleSuccessSection(formData);
+  setPreference(SUCCESS_TYPE, 'message');
   return false;
 };
 
 const readyForm = (form, formData) => {
   const formEl = form.getFormElem().get(0);
+  const el = formEl.closest('.marketo');
   const isDesktop = matchMedia('(min-width: 900px)');
+  el.classList.remove('loading');
 
   formEl.addEventListener('focus', ({ target }) => {
     /* c8 ignore next 9 */
@@ -137,19 +212,24 @@ export const loadMarketo = (el, formData) => {
   const baseURL = formData[BASE_URL];
   const munchkinID = formData[MUNCHKIN_ID];
   const formID = formData[FORM_ID];
+  const { base } = getConfig();
 
-  loadScript(`https://${baseURL}/js/forms2/js/forms2.min.js`)
+  loadScript(`${base}/deps/forms2.min.js`)
     .then(() => {
       const { MktoForms2 } = window;
       if (!MktoForms2) throw new Error('Marketo forms not loaded');
 
       MktoForms2.loadForm(`//${baseURL}`, munchkinID, formID);
       MktoForms2.whenReady((form) => { readyForm(form, formData); });
+      /* c8 ignore next 3 */
+      if (el.classList.contains('multi-step')) {
+        import('./marketo-multi.js').then(({ default: multiStep }) => multiStep(el));
+      }
     })
     .catch(() => {
       /* c8 ignore next 2 */
       el.style.display = 'none';
-      window.lana?.log(`Error loading Marketo form for ${munchkinID}_${formID}`, { tags: 'errorType=error,module=marketo' });
+      window.lana?.log(`Error loading Marketo form for ${munchkinID}_${formID}`, { tags: 'error,marketo' });
     });
 };
 
@@ -186,6 +266,15 @@ export default function init(el) {
     return;
   }
 
+  const searchParams = new URLSearchParams(window.location.search);
+  const ungated = searchParams.get(FORM_PARAM) === 'off';
+
+  if (formData[SUCCESS_TYPE] === 'section' && ungated) {
+    el.classList.add('hide-block');
+    toggleSuccessSection(formData);
+    return;
+  }
+
   formData[SUCCESS_TYPE] = formData[SUCCESS_TYPE] || 'redirect';
 
   if (formData[SUCCESS_TYPE] === 'redirect') {
@@ -216,6 +305,13 @@ export default function init(el) {
 
   fragment.append(formWrapper);
   el.replaceChildren(fragment);
+  el.classList.add('loading');
+  /* c8 ignore next 3 */
+  if (el.classList.contains('multi-2') || el.classList.contains('multi-3')) {
+    el.classList.add('multi-step');
+  }
+
+  loadLink(`https://${baseURL}`, { rel: 'dns-prefetch' });
 
   createIntersectionObserver({
     el,

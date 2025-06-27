@@ -1,10 +1,20 @@
 import { html, signal, useEffect } from '../../../deps/htm-preact.js';
+import userCanPublishPage from '../../../tools/utils/publish.js';
 
-const NOT_FOUND = { preview: { lastModified: 'Not found' }, live: { lastModified: 'Not found' } };
+const DEF_NOT_FOUND = 'Not found';
+const DEF_NEVER = 'Never';
+const NOT_FOUND = {
+  preview: { lastModified: DEF_NOT_FOUND },
+  live: { lastModified: DEF_NOT_FOUND },
+};
+const DA_DOMAIN = 'da.live';
+const nonEDSContent = 'Non AEM EDS Content';
+const EXCLUDED_PATHS = ['/tools/caas'];
 
 const content = signal({});
 
 function getAdminUrl(url, type) {
+  if (!(/adobecom\.(hlx|aem)./.test(url.hostname))) return false;
   const project = url.hostname === 'localhost' ? 'main--milo--adobecom' : url.hostname.split('.')[0];
   const [branch, repo, owner] = project.split('--');
   const base = `https://admin.hlx.page/${type}/${owner}/${repo}/${branch}${url.pathname}`;
@@ -13,22 +23,35 @@ function getAdminUrl(url, type) {
 
 async function getStatus(url) {
   const adminUrl = getAdminUrl(url, 'status');
+  if (!adminUrl) {
+    return {
+      url,
+      edit: null,
+      preview: nonEDSContent,
+      live: nonEDSContent,
+      publish: nonEDSContent,
+      externalUrl: url,
+    };
+  }
   const resp = await fetch(adminUrl);
   if (!resp.ok) return {};
   const json = await resp.json();
-  const preview = json.preview.lastModified || 'Never';
-  const live = json.live.lastModified || 'Never';
-  const edit = json.edit.url;
-  return { url, edit, preview, live };
+  const preview = json.preview.lastModified || DEF_NEVER;
+  const live = json.live.lastModified || DEF_NEVER;
+  const publish = await userCanPublishPage(json, false);
+  const { sourceLocation } = json.preview;
+  const edit = json.edit?.url
+    || (sourceLocation?.includes(DA_DOMAIN) && sourceLocation?.replace('markup:https://content.da.live', 'https://da.live/edit#'))
+    || '';
+  return { url, edit, preview, live, publish };
 }
 
-function getStatuses() {
-  Object.keys(content.value).forEach((key) => {
-    content.value[key].items.forEach((item, idx) => {
-      getStatus(item.url).then((status) => {
-        content.value[key].items[idx] = status;
-        content.value = { ...content.value };
-      });
+async function getStatuses() {
+  Object.keys(content.value).forEach(async (key) => {
+    content.value[key].items.forEach(async (item, idx) => {
+      const status = await getStatus(item.url);
+      content.value[key].items[idx] = status;
+      content.value = { ...content.value };
     });
   });
 }
@@ -39,18 +62,22 @@ function getUrl(el) {
   try {
     return new URL(dataPath);
   } catch {
-    const path = dataPath ? `${window.location.origin}${dataPath}` : el.href;
+    const isPdfIframe = el.src && el.nodeName === 'IFRAME' && el.parentElement?.dataset.pdfSrc;
+    const elPath = el.href || (isPdfIframe ? el.parentElement.dataset.pdfSrc : el.src);
+    const path = dataPath ? `${window.location.origin}${dataPath}` : elPath;
     return new URL(path);
   }
 }
 
 function findLinks(selector) {
-  const hrefs = [];
+  const hrefs = new Set();
   return [...document.body.querySelectorAll(selector)]
     .reduce((links, el) => {
       const url = getUrl(el);
-      if (!hrefs.includes(url.href)) {
-        hrefs.push(url.href);
+      const baseUrl = `${url.origin}${url.pathname}`;
+      if (EXCLUDED_PATHS.some((path) => url.pathname.includes(path))) return links;
+      if (!hrefs.has(baseUrl)) {
+        hrefs.add(baseUrl);
         links.push({ url, edit: null, preview: 'Fetching', live: 'Fetching' });
       }
       return links;
@@ -64,16 +91,26 @@ async function setContent() {
     page: { items: [{ url: new URL(window.location.href), edit: null, preview: 'Fetching', live: 'Fetching' }] },
     fragments: { items: findLinks('main .fragment, a[data-modal-path], [data-path]') },
     links: { items: findLinks('main a[href^="/"') },
+    svgs: { items: findLinks('img[src$=".svg"') },
+    pdfs: { items: findLinks('main iframe') },
     nav: { items: findLinks('header a[href^="/"'), closed: true },
   };
 
   getStatuses();
+  const sk = document.querySelector('aem-sidekick, helix-sidekick');
+  sk?.addEventListener('statusfetched', async () => { // sidekick v6
+    getStatuses();
+  });
+  sk?.addEventListener('status-fetched', async () => { // sidekick v7
+    getStatuses();
+  });
 }
 
 async function handleAction(action) {
   Object.keys(content.value).map(async (key) => {
     content.value[key].items.forEach(async (item, idx) => {
-      if (!item.checked) return;
+      const checkPublish = action === 'live' ? (item.publish && !item.publish.canPublish) : false;
+      if (!item.checked || checkPublish) return;
       content.value[key].items[idx].action = action;
       content.value = { ...content.value };
       const adminUrl = getAdminUrl(item.url, action);
@@ -110,6 +147,14 @@ function toggleGroup(name) {
   content.value = { ...content.value };
 }
 
+function checkPublishing(item, isFetching) {
+  if ((item.preview === DEF_NEVER && item.live === DEF_NEVER)
+    || (item.preview === DEF_NOT_FOUND && item.live === DEF_NOT_FOUND)) {
+    return ' not-found';
+  }
+  return isFetching;
+}
+
 function prettyDate(string) {
   if (Number.isNaN(Date.parse(string))) return string;
 
@@ -128,18 +173,34 @@ function prettyPath(url) {
   return url.hash ? `${url.pathname} (${url.hash})` : url.pathname;
 }
 
+function usePublishProps(item) {
+  let disablePublish;
+  if (item.publish && !item.publish.canPublish) {
+    disablePublish = html`${item.publish.message}`;
+  }
+  return {
+    publishText: html`${item.action === 'live' ? 'Publishing' : prettyDate(item.live)}`,
+    disablePublish,
+  };
+}
+
 function Item({ name, item, idx }) {
+  const { publishText, disablePublish } = usePublishProps(item);
   const isChecked = item.checked ? ' is-checked' : '';
-  const isFetching = item.edit ? '' : ' is-fetching';
+  const isFetching = item.edit || item.preview === nonEDSContent ? '' : ' is-fetching';
+  const editIcon = item.edit && item.edit.includes(DA_DOMAIN) ? 'da-icon' : 'sharepoint-icon';
+  const prettyUrl = item.externalUrl ? item.externalUrl.href : prettyPath(item.url);
   if (!item.url) return undefined;
 
   return html`
-    <div class="preflight-group-row preflight-group-detail${isChecked}${isFetching}"
+    <div class="preflight-group-row preflight-group-detail${isChecked}${checkPublishing(item, isFetching)}"
       onClick=${(e) => handleChange(e.target, name, idx)}>
-      <p><a href=${item.url.pathname} target=_blank>${prettyPath(item.url)}</a></p>
-      <p>${item.edit && html`<a href=${item.edit} class=preflight-edit target=_blank>EDIT</a>`}</p>
+      <p><a href=${item.externalUrl || item.url.pathname} target=_blank>${prettyUrl}</a></p>
+      <p>${item.edit && html`<a href=${item.edit} class="preflight-edit ${editIcon}" target=_blank>EDIT</a>`}</p>
       <p class=preflight-date-wrapper>${item.action === 'preview' ? 'Previewing' : prettyDate(item.preview)}</p>
-      <p class=preflight-date-wrapper>${item.action === 'live' ? 'Publishing' : prettyDate(item.live)}</p>
+      <p class="preflight-date-wrapper">
+        ${isChecked && disablePublish ? html`<span class=disabled-publish>${disablePublish}</span>` : publishText}
+      </p>
     </div>`;
 }
 
@@ -167,11 +228,17 @@ function ContentGroup({ name, group }) {
 export default function General() {
   useEffect(() => { setContent(); }, []);
 
-  const checked = Object.keys(content.value)
-    .find((key) => content.value[key].items.find((item) => item.checked));
+  const allChecked = Object.values(content.value)
+    .flatMap((item) => item.items).filter((item) => item.checked);
+
+  const checked = !!allChecked.length;
+  const publishable = allChecked
+    .filter((item) => item.checked && !!item.publish?.canPublish).length;
 
   const hasPage = content.value.page;
   const selectStyle = checked ? 'Select none' : 'Select all';
+
+  const tooltip = allChecked.length !== publishable && 'Puplishing disabled pages will be ignored';
 
   return html`
     <div class=preflight-general-content>
@@ -188,9 +255,13 @@ export default function General() {
         <div id=preview-action class=preflight-action-wrapper>
           <button class=preflight-action onClick=${() => handleAction('preview')}>Preview</button>
         </div>
-        <div id=publish-action class=preflight-action-wrapper>
-          <button class=preflight-action onClick=${() => handleAction('live')}>Publish</button>
-        </div>
+        ${!!publishable && html`
+          <div id=publish-action class="preflight-action-wrapper${tooltip ? ' tooltip' : ''}" data-tooltip=${tooltip}>
+            <button class="preflight-action" onClick=${() => handleAction('live')}>
+              Publish
+            </button>
+          </div>
+        `}
       `}
     </div>
   `;

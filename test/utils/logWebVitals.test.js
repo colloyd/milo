@@ -5,15 +5,8 @@ import logWebVitals from '../../libs/utils/logWebVitals.js';
 
 document.body.innerHTML = await readFile({ path: './mocks/body.html' });
 
+window.adobePrivacy = { activeCookieGroups: () => ['C0002'] };
 describe('Log Web Vitals', () => {
-  before(() => {
-    window.adobePrivacy = { activeCookieGroups: () => ['C0002'] };
-  });
-
-  after(() => {
-    delete window.adobePrivacy;
-  });
-
   it('Logs data to lana', (done) => {
     window.lana = {
       log: (logStr, logOpts) => {
@@ -30,15 +23,21 @@ describe('Log Web Vitals', () => {
         const downlink = parseFloat(vitals.downlink);
         expect(downlink).to.be.within(0, 10);
         expect(parseInt(vitals.lcp, 10)).to.be.greaterThan(1);
-        expect(vitals.lcpEl).to.be.equal('/test/utils/mocks/media_.png');
-        expect(vitals.lcpElType).to.be.equal('img');
+        expect(vitals).to.have.property('lcpEl');
+        expect(vitals.lcpEl).to.be.a('string').that.is.not.empty;
+        expect(vitals).to.have.property('lcpElType');
+        expect(vitals.lcpElType).to.be.a('string').that.is.not.empty;
+        expect(vitals.lcpSectionOne).to.equal('true');
         expect(vitals.loggedIn).to.equal('false');
         expect(vitals.manifest3path).to.equal('/cc-shared/fragments/promos/2024/americas/cci-all-apps-q3/cci-all-apps-q3.json');
         expect(vitals.manifest3selected).to.equal('all');
         expect(vitals.manifest4path).to.equal('/cc-shared/fragments/tests/2024/q2/ace0875/ace0875.json');
         expect(vitals.manifest4selected).to.equal('target-var-marqueelink');
-        expect(vitals.os).to.be.oneOf(['mac', 'win', 'android', 'linux', '']);
+        expect(vitals.os).to.be.oneOf(['mac', 'iOS', 'win', 'android', 'linux', '']);
+        expect(vitals.tablet).to.be.oneOf(['yes', 'no']);
         expect(vitals.url).to.equal('localhost:2000/');
+        expect(vitals.isMep).to.equal('false');
+        expect(vitals.isFrag).to.equal('false');
         expect(parseInt(vitals.windowHeight, 10)).to.be.greaterThan(200);
         expect(parseInt(vitals.windowWidth, 10)).to.be.greaterThan(200);
 

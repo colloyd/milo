@@ -5,15 +5,20 @@ import {
   decorateTextOverrides,
   decorateButtons,
   handleObjectFit,
+  loadCDT,
 } from '../../utils/decorate.js';
 import { createTag, loadStyle, getConfig } from '../../utils/utils.js';
 
 const contentTypes = ['list', 'qrcode', 'lockup', 'text', 'bgcolor', 'supplemental'];
 const rowTypeKeyword = 'con-block-row-';
 const breakpointThemeClasses = ['dark-mobile', 'light-mobile', 'dark-tablet', 'light-tablet', 'dark-desktop', 'light-desktop'];
+const textDefault = ['xxl', 'm', 'l']; // heading, body, detail
+
+const { miloLibs, codeRoot } = getConfig();
+const base = miloLibs || codeRoot;
 
 function distillClasses(el, classes) {
-  const taps = ['-heading', '-body', '-detail'];
+  const taps = ['-heading', '-body', '-detail', '-button'];
   classes?.forEach((elClass) => {
     const elTaps = taps.filter((tap) => elClass.endsWith(tap));
     if (!elTaps.length) return;
@@ -48,10 +53,35 @@ function decorateQr(el) {
   });
 }
 
-function decorateLockupFromContent(el) {
+async function loadIconography() {
+  await new Promise((resolve) => { loadStyle(`${base}/styles/iconography.css`, resolve); });
+}
+
+async function decorateLockupFromContent(el) {
   const rows = el.querySelectorAll(':scope > p');
   const firstRowImg = rows[0]?.querySelector('img');
-  if (firstRowImg) rows[0].classList.add('lockup-area');
+  if (!firstRowImg) return;
+  await loadIconography();
+  rows[0].classList.add('lockup-area');
+  rows[0].childNodes.forEach((node) => {
+    if (node.nodeType === 3 && node.nodeValue?.trim()) {
+      const newSpan = createTag('span', { class: 'lockup-label' }, node.nodeValue);
+      node.parentElement.replaceChild(newSpan, node);
+    }
+  });
+}
+
+async function decorateLockupRow(el, classes) {
+  const child = el.querySelector(':scope > div');
+  await loadIconography();
+  child?.classList.add('lockup-area');
+  const iconSizeClass = classes?.find((c) => c.endsWith('-icon'));
+  const lockupSizeClass = classes?.find((c) => c.endsWith('-lockup'));
+  const usedLockupClass = iconSizeClass || lockupSizeClass;
+  if (usedLockupClass) {
+    el.classList.remove(usedLockupClass);
+  }
+  el.classList.add(`${usedLockupClass?.split('-')[0] || 'l'}-lockup`);
 }
 
 function decorateBg(el) {
@@ -60,22 +90,29 @@ function decorateBg(el) {
   el.remove();
 }
 
+function wrapInnerHTMLInPTag(el) {
+  const innerDiv = el.querySelector(':scope > div');
+  const containsPTag = [...innerDiv.childNodes].some((node) => node.nodeName === 'P');
+  if (!containsPTag) {
+    const pTag = createTag('p');
+    while (innerDiv.firstChild) pTag.appendChild(innerDiv.firstChild);
+    innerDiv.appendChild(pTag);
+  }
+}
+
 function decorateText(el, classes) {
   el.classList.add('norm');
+  wrapInnerHTMLInPTag(el);
   const btnClass = classes?.find((c) => c.endsWith('-button'));
   if (btnClass) {
     const [theme, size] = btnClass.split('-').reverse();
     el.classList.remove(btnClass);
-    decorateButtons(el, `${size}-${theme}`);
+    decorateButtons(el, `${theme}-${size}`);
   } else {
     decorateButtons(el, 'button-xl');
   }
-  distillClasses(el, classes);
-}
-
-function decorateLockupRow(el) {
-  const child = el.querySelector(':scope > div');
-  if (child) child.classList.add('lockup-area');
+  decorateBlockText(el, textDefault);
+  decorateTextOverrides(el, ['-heading', '-body', '-detail']);
 }
 
 function decorateSup(el, classes) {
@@ -100,14 +137,14 @@ function parseKeyString(str) {
   return result;
 }
 
-function loadContentType(el, key, classes) {
+async function loadContentType(el, key, classes) {
   if (classes !== undefined && classes.length) el.classList.add(...classes);
   switch (key) {
     case 'bgcolor':
       decorateBg(el);
       break;
     case 'lockup':
-      decorateLockupRow(el);
+      await decorateLockupRow(el, classes);
       break;
     case 'qrcode':
       decorateQr(el);
@@ -126,8 +163,67 @@ function loadContentType(el, key, classes) {
 }
 
 function loadBreakpointThemes() {
-  const { miloLibs, codeRoot } = getConfig();
-  loadStyle(`${miloLibs || codeRoot}/styles/breakpoint-theme.css`);
+  loadStyle(`${base}/styles/breakpoint-theme.css`);
+}
+
+export function getViewportOrder(viewport, content) {
+  const els = [...content.children];
+  const viewportObject = { 0: [] };
+  els.forEach((el) => {
+    const orderClass = {
+      tablet: null,
+      desktop: null,
+    };
+    el.classList.forEach((className) => {
+      if (!className.startsWith('order-')
+        || (!className.endsWith('desktop') && !className.endsWith('tablet'))) return;
+      orderClass.tablet = orderClass.tablet || (className.endsWith('tablet') ? className : null);
+      orderClass.desktop = orderClass.desktop || (className.endsWith('desktop') ? className : null);
+    });
+    const viewportClass = orderClass[viewport] || orderClass.tablet;
+    const order = parseInt(viewportClass?.split('-')[1], 10);
+    if (Number.isInteger(order)) {
+      if (!viewportObject[order]) viewportObject[order] = [];
+      viewportObject[order].push(el);
+    } else {
+      viewportObject[0].push(el);
+    }
+  });
+
+  const viewportOrder = [];
+  Object.keys(viewportObject).sort((a, b) => a - b).forEach((key) => {
+    viewportOrder.push(...viewportObject[key]);
+  });
+  return viewportOrder;
+}
+
+function handleViewportOrder(content) {
+  const hasOrder = content.querySelector(':scope > div[class*="order-"]');
+  if (!hasOrder) return;
+
+  const viewports = {
+    mobile: {
+      media: '(max-width: 599px)',
+      elements: [...content.children],
+    },
+    tablet: {
+      media: '(min-width: 600px) and (max-width: 1199px)',
+      elements: getViewportOrder('tablet', content),
+    },
+    desktop: {
+      media: '(min-width: 1200px)',
+      elements: getViewportOrder('desktop', content),
+    },
+  };
+
+  Object.entries(viewports).forEach(([viewport, { media, elements }]) => {
+    const mediaQuery = window.matchMedia(media);
+    if (mediaQuery.matches && viewport !== 'mobile') content.replaceChildren(...elements);
+    mediaQuery.addEventListener('change', (e) => {
+      if (!e.matches) return;
+      content.replaceChildren(...elements);
+    });
+  });
 }
 
 export default async function init(el) {
@@ -151,7 +247,7 @@ export default async function init(el) {
   foreground.classList.add('foreground', `cols-${fRows.length}`);
   let copy = fRows[0];
   const anyTag = foreground.querySelector('p, h1, h2, h3, h4, h5, h6');
-  const asset = foreground.querySelector('div > picture, div > video, div > a[href*=".mp4"], div > a.image-link');
+  const asset = foreground.querySelector('div > picture, :is(.video-container, .pause-play-wrapper), div > video, div > a[href*=".mp4"], div > a.image-link');
   const allRows = foreground.querySelectorAll('div > div');
   copy = anyTag.closest('div');
   copy.classList.add('copy');
@@ -175,8 +271,8 @@ export default async function init(el) {
     : null;
   if (assetUnknown) assetUnknown.classList.add('asset-unknown');
 
-  decorateBlockText(copy, ['xxl', 'm', 'l']); // heading, body, detail
-  decorateLockupFromContent(copy);
+  decorateBlockText(copy, textDefault, 'hasDetailHeading');
+  await decorateLockupFromContent(copy);
   extendButtonsClass(copy);
 
   /* c8 ignore next 2 */
@@ -187,15 +283,21 @@ export default async function init(el) {
 
   const assetRow = allRows[0].classList.contains('asset');
   if (assetRow) el.classList.add('asset-left');
-  const mainCopy = createTag('div', { class: 'main-copy' }, copy.innerHTML);
+  const lockupClass = [...el.classList].find((c) => c.endsWith('-lockup'));
+  if (lockupClass) el.classList.remove(lockupClass);
+  const buttonClass = [...el.classList].find((c) => c.endsWith('-button'));
+  if (buttonClass) el.classList.remove(buttonClass);
+  const classes = `main-copy ${lockupClass || 'l-lockup'} ${buttonClass || 'l-button'}`;
+  const mainCopy = createTag('div', { class: classes });
+  while (copy.childNodes.length > 0) {
+    mainCopy.appendChild(copy.childNodes[0]);
+  }
   rows.splice(mainRowIndex, 1);
   if (mainRowIndex > 0) {
     for (let i = 0; i < mainRowIndex; i += 1) {
       rows[i].classList.add('prepend');
     }
   }
-
-  copy.innerHTML = '';
   copy.append(mainCopy);
   [...rows].forEach((row) => {
     if (row.classList.contains('prepend')) {
@@ -204,7 +306,7 @@ export default async function init(el) {
       copy.append(row);
     }
   });
-
+  const promiseArr = [];
   [...rows].forEach(async (row) => {
     const cols = row.querySelectorAll(':scope > div');
     const firstCol = cols[0];
@@ -216,7 +318,9 @@ export default async function init(el) {
       firstCol.parentElement.classList.add(`row-${parsed.key}`, 'con-block');
       firstCol.remove();
       cols[1].classList.add('row-wrapper');
-      if (contentTypes.includes(parsed.key)) loadContentType(row, parsed.key, parsed.classes);
+      if (contentTypes.includes(parsed.key)) {
+        promiseArr.push(loadContentType(row, parsed.key, parsed.classes));
+      }
     } else {
       row.classList.add('norm');
       decorateBlockHrs(row);
@@ -224,4 +328,11 @@ export default async function init(el) {
     }
   });
   decorateTextOverrides(el, ['-heading', '-body', '-detail'], mainCopy);
+  handleViewportOrder(copy);
+
+  if (el.classList.contains('countdown-timer')) {
+    promiseArr.push(loadCDT(copy, el.classList));
+  }
+
+  await Promise.all(promiseArr);
 }

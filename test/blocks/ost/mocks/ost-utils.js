@@ -23,6 +23,14 @@ const loadScript = () => Promise.resolve();
 
 const loadStyle = () => Promise.resolve();
 
+const createTag = () => Promise.resolve();
+
+const loadArea = () => Promise.resolve();
+
+const localizeLink = () => Promise.resolve();
+
+const loadLink = () => Promise.resolve();
+
 const mockRes = ({ payload, status = 200 } = {}) => new Promise((resolve) => {
   resolve({
     status,
@@ -32,7 +40,6 @@ const mockRes = ({ payload, status = 200 } = {}) => new Promise((resolve) => {
     text: () => payload,
   });
 });
-
 function mockOstDeps({ failStatus = false, failMetadata = false, mockToken, overrideParams } = {}) {
   const options = {
     country: 'CH',
@@ -100,6 +107,40 @@ function unmockOstDeps() {
   window.history.replaceState({}, '', ogUrl);
 }
 
+const customFetch = window.fetch;
+const PAGE_URL = new URL(window.location.href);
+const SLD = PAGE_URL.hostname.includes('.aem.') ? 'aem' : 'hlx';
+
+/**
+ * TODO: This method will be deprecated and removed in a future version.
+ * @see https://jira.corp.adobe.com/browse/MWPW-173470
+ * @see https://jira.corp.adobe.com/browse/MWPW-174411
+*/
+const shouldAllowKrTrial = (button, localePrefix) => {
+  const allowKrTrialHash = '#_allow-kr-trial';
+  const hasAllowKrTrial = button.href?.includes(allowKrTrialHash);
+  if (hasAllowKrTrial) {
+    button.href = button.href.replace(allowKrTrialHash, '');
+    const modalHash = button.getAttribute('data-modal-hash');
+    if (modalHash) button.setAttribute('data-modal-hash', modalHash.replace(allowKrTrialHash, ''));
+  }
+  return localePrefix === '/kr' && hasAllowKrTrial;
+};
+
 export {
-  getConfig, getLocale, getMetadata, loadScript, loadStyle, mockOstDeps, unmockOstDeps, mockRes,
+  createTag,
+  getConfig,
+  getLocale,
+  getMetadata,
+  loadArea,
+  loadScript,
+  loadStyle,
+  localizeLink,
+  loadLink,
+  mockOstDeps,
+  unmockOstDeps,
+  mockRes,
+  customFetch,
+  SLD,
+  shouldAllowKrTrial,
 };

@@ -1,5 +1,5 @@
 /* eslint-disable max-classes-per-file */
-import { createTag, getConfig, loadArea, localizeLink } from '../../utils/utils.js';
+import { createTag, getConfig, loadArea, localizeLink, customFetch } from '../../utils/utils.js';
 
 const fragMap = {};
 
@@ -11,7 +11,7 @@ const removeHash = (url) => {
 const isCircularRef = (href) => [...Object.values(fragMap)]
   .some((tree) => {
     const node = tree.find(href);
-    return node ? !(node.isLeaf) : false;
+    return node?.isRecursive;
   });
 
 const updateFragMap = (fragment, a, href) => {
@@ -19,15 +19,24 @@ const updateFragMap = (fragment, a, href) => {
     .filter((link) => localizeLink(link.href).includes('/fragments/'));
   if (!fragLinks.length) return;
 
-  if (document.body.contains(a)) { // is fragment on page (not nested)
+  if (document.body.contains(a) && !a.parentElement?.closest('.fragment')) {
     // eslint-disable-next-line no-use-before-define
     fragMap[href] = new Tree(href);
     fragLinks.forEach((link) => fragMap[href].insert(href, localizeLink(removeHash(link.href))));
   } else {
     Object.values(fragMap).forEach((tree) => {
-      if (tree.find(href)) {
-        fragLinks.forEach((link) => tree.insert(href, localizeLink(removeHash(link.href))));
-      }
+      const hrefNode = tree.find(href);
+      if (!hrefNode) return;
+
+      fragLinks.forEach((link) => {
+        const localizedHref = localizeLink(removeHash(link.href));
+        const parentNodeSameHref = hrefNode.findParent(localizedHref);
+        if (parentNodeSameHref) {
+          parentNodeSameHref.isRecursive = true;
+        } else {
+          hrefNode.addChild(localizedHref);
+        }
+      });
     });
   }
 };
@@ -35,12 +44,12 @@ const updateFragMap = (fragment, a, href) => {
 const insertInlineFrag = (sections, a, relHref) => {
   // Inline fragments only support one section, other sections are ignored
   const fragChildren = [...sections[0].children];
-  fragChildren.forEach((child) => child.setAttribute('data-path', relHref));
   if (a.parentElement.nodeName === 'DIV' && !a.parentElement.attributes.length) {
     a.parentElement.replaceWith(...fragChildren);
   } else {
     a.replaceWith(...fragChildren);
   }
+  fragChildren.forEach((child) => child.setAttribute('data-path', relHref));
 };
 
 function replaceDotMedia(path, doc) {
@@ -54,7 +63,7 @@ function replaceDotMedia(path, doc) {
 }
 
 export default async function init(a) {
-  const { decorateArea, mep } = getConfig();
+  const { decorateArea, mep, placeholders, locale } = getConfig();
   let relHref = localizeLink(a.href);
   let inline = false;
 
@@ -66,16 +75,24 @@ export default async function init(a) {
     div.append(...children);
   }
 
+  let mepFrag;
+  try {
+    const path = !a.href.includes('/federal/') ? new URL(a.href).pathname
+      : a.href.replace('#_inline', '').replace(locale.prefix, '');
+    mepFrag = mep?.fragments?.[path];
+  } catch (e) {
+    // do nothing
+  }
+  if (mepFrag) {
+    const { handleFragmentCommand } = await import('../../features/personalization/personalization.js');
+    relHref = handleFragmentCommand(mepFrag, a);
+    if (!relHref) return;
+  }
+
   if (a.href.includes('#_inline')) {
     inline = true;
     a.href = a.href.replace('#_inline', '');
     relHref = relHref.replace('#_inline', '');
-  }
-
-  const path = new URL(a.href).pathname;
-  if (mep?.fragments?.[path]) {
-    relHref = mep.handleFragmentCommand(mep?.fragments[path], a);
-    if (!relHref) return;
   }
 
   if (isCircularRef(relHref)) {
@@ -83,10 +100,9 @@ export default async function init(a) {
     return;
   }
 
-  const { customFetch } = await import('../../utils/helpers.js');
   let resourcePath = a.href;
   if (a.href.includes('/federal/')) {
-    const { getFederatedUrl } = await import('../../utils/federated.js');
+    const { getFederatedUrl } = await import('../../utils/utils.js');
     resourcePath = getFederatedUrl(a.href);
   }
   const resp = await customFetch({ resource: `${resourcePath}.plain.html`, withCacheRules: true })
@@ -110,18 +126,22 @@ export default async function init(a) {
   }
 
   const fragment = createTag('div', { class: 'fragment', 'data-path': relHref });
-
-  if (!inline) {
-    fragment.append(...sections);
-  }
+  fragment.append(...sections);
 
   updateFragMap(fragment, a, relHref);
-  if (a.dataset.manifestId || a.dataset.adobeTargetTestid) {
-    const { updateFragDataProps } = await import('../../features/personalization/personalization.js');
-    updateFragDataProps(a, inline, sections, fragment);
+  if (a.dataset.manifestId
+    || a.dataset.adobeTargetTestid
+    || mep?.commands?.length
+    || placeholders) {
+    const { updateFragDataProps, handleCommands, replacePlaceholders } = await import('../../features/personalization/personalization.js');
+    if (a.dataset.manifestId || a.dataset.adobeTargetTestid) {
+      updateFragDataProps(a, inline, sections, fragment);
+    }
+    if (mep?.commands?.length) handleCommands(mep?.commands, fragment, false, true);
+    if (placeholders) fragment.innerHTML = replacePlaceholders(fragment.innerHTML, placeholders);
   }
   if (inline) {
-    insertInlineFrag(sections, a, relHref);
+    insertInlineFrag(sections, a, relHref, mep);
   } else {
     a.parentElement.replaceChild(fragment, a);
     await loadArea(fragment);
@@ -134,10 +154,19 @@ class Node {
     this.value = value;
     this.parent = parent;
     this.children = [];
+    this.isRecursive = false;
   }
 
-  get isLeaf() {
-    return this.children.length === 0;
+  addChild(key, value = key) {
+    const alreadyHasChild = this.children.some((n) => n.key === key);
+    if (!alreadyHasChild) {
+      this.children.push(new Node(key, value, this));
+    }
+  }
+
+  findParent(key) {
+    if (this.parent?.key === key) return this.parent;
+    return this.parent?.findParent(key);
   }
 }
 

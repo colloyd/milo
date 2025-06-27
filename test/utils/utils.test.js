@@ -1,16 +1,52 @@
+/* eslint-disable no-underscore-dangle */
 import { readFile, setViewport } from '@web/test-runner-commands';
 import { expect } from '@esm-bundle/chai';
 import sinon from 'sinon';
 import { waitFor, waitForElement } from '../helpers/waitfor.js';
 import { mockFetch } from '../helpers/generalHelpers.js';
-import { createTag } from '../../libs/utils/utils.js';
+import { createTag, customFetch } from '../../libs/utils/utils.js';
 
 const utils = {};
-
 const config = {
   codeRoot: '/libs',
   locales: { '': { ietf: 'en-US', tk: 'hah7vzn.css' } },
 };
+const stageDomainsMap = {
+  'www.stage.adobe.com': {
+    'www.adobe.com': 'origin',
+    'business.adobe.com': 'business.stage.adobe.com',
+    'blog.adobe.com': 'blog.stage.adobe.com',
+    'helpx.adobe.com': 'helpx.stage.adobe.com',
+    'news.adobe.com': 'news.stage.adobe.com',
+  },
+  '--bacom--adobecom.hlx.live': {
+    'business.adobe.com': 'origin',
+    'blog.adobe.com': 'main--blog--adobecom.hlx.live',
+    'helpx.adobe.com': 'main--helpx--adobecom.hlx.live',
+    'news.adobe.com': 'main--news--adobecom.hlx.live',
+  },
+  '--blog--adobecom.hlx.page': {
+    'blog.adobe.com': 'origin',
+    'business.adobe.com': 'main--bacom--adobecom.hlx.page',
+    'helpx.adobe.com': 'main--helpx--adobecom.hlx.page',
+    'news.adobe.com': 'main--news--adobecom.hlx.page',
+  },
+  '.business-graybox.adobe.com': { 'business.adobe.com': 'origin' },
+};
+const stageDomainsMapWRegex = {
+  hostname: 'stage--milo--owner.hlx.page',
+  map: {
+    '^https://.*--milo--owner.hlx.page': {
+      '^https://www.adobe.com/acrobat': 'https://main--dc--adobecom.hlx.page',
+      '^https://business.adobe.com/blog': 'https://main--bacom-blog--adobecom.hlx.page',
+      '^https://business.adobe.com': 'https://business.stage.adobe.com',
+      '^https://www.adobe.com': 'origin',
+    },
+  },
+
+};
+const prodDomains = ['www.adobe.com', 'business.adobe.com', 'blog.adobe.com', 'helpx.adobe.com', 'news.adobe.com'];
+const externalDomains = ['external1.com', 'external2.com'];
 const ogFetch = window.fetch;
 
 describe('Utils', () => {
@@ -31,11 +67,87 @@ describe('Utils', () => {
     delete window.hlx;
   });
 
+  it('fetches with cache param', async () => {
+    window.fetch = mockFetch({ payload: true });
+    const resp = await customFetch({ resource: './mocks/taxonomy.json', withCacheRules: true });
+    expect(resp.json()).to.be.true;
+  });
+
+  describe('prerendered support', () => {
+    it('loads milo minimally when document is prerendered', async () => {
+      document.head.innerHTML = head;
+      document.body.innerHTML = await readFile({ path: './mocks/body-page-load-ok-milo.html' });
+
+      const originalMarquee = document.querySelector('.marquee');
+      await utils.loadArea();
+      expect(document.querySelector('.marquee')).to.equal(originalMarquee);
+    });
+  });
+
+  describe('core-functionality', () => {
+    it('preloads blocks for performance reasons', async () => {
+      document.head.innerHTML = head;
+      document.body.innerHTML = await readFile({ path: './mocks/marquee.html' });
+
+      await utils.loadArea();
+      const scriptPreload = document.head.querySelector('link[href*="/libs/blocks/marquee/marquee.js"]');
+      const marqueeDecoratePreload = document.head.querySelector('link[href*="/libs/utils/decorate.js"]');
+      const stylePreload = document.head.querySelector('link[href*="/libs/blocks/marquee/marquee.css"]');
+      expect(marqueeDecoratePreload).to.exist;
+      expect(scriptPreload).to.exist;
+      expect(stylePreload).to.exist;
+    });
+  });
+
+  it('renders global navigation when header tag is present', async () => {
+    const bodyWithheader = await readFile({ path: './mocks/body-gnav.html' });
+    document.head.innerHTML = head;
+    document.body.innerHTML = bodyWithheader;
+    await utils.loadArea();
+    expect(document.querySelector('.global-navigation')).to.exist;
+  });
+
+  it('render meta performanceV2 renders the normal flow', async () => {
+    const metaTag = document.createElement('meta');
+    metaTag.setAttribute('name', 'personalization-v2');
+    metaTag.setAttribute('content', 'personalization-v2');
+    document.head.appendChild(metaTag);
+
+    const bodyWithheader = await readFile({ path: './mocks/body-gnav.html' });
+    document.body.innerHTML = bodyWithheader;
+
+    await utils.loadArea();
+    expect(document.querySelector('.global-navigation')).to.exist;
+  });
+
+  it('render meta performanceV2 renders the normal flow with params', async () => {
+    const params = new URLSearchParams({ 'target-timeout': '1000' });
+    const baseUrl = `${window.location.origin}${window.location.pathname}`;
+
+    const newUrl = `${baseUrl}?${params.toString()}`;
+
+    window.history.pushState({ path: newUrl }, '', newUrl);
+    const localHead = await readFile({ path: './mocks/mep/head-target-postlcp.html' });
+    document.head.innerHTML = localHead;
+    const metaTag = document.createElement('meta');
+    metaTag.setAttribute('name', 'personalization-v2');
+    metaTag.setAttribute('content', 'on');
+    document.head.appendChild(metaTag);
+
+    const bodyWithheader = await readFile({ path: './mocks/body-gnav.html' });
+    document.body.innerHTML = bodyWithheader;
+
+    await utils.loadArea();
+    expect(document.querySelector('.global-navigation')).to.exist;
+  });
+
   describe('with body', () => {
     beforeEach(async () => {
       window.fetch = mockFetch({ payload: { data: '' } });
+
       document.head.innerHTML = head;
       document.body.innerHTML = body;
+
       await utils.loadArea();
       sinon.spy(console, 'log');
     });
@@ -89,11 +201,80 @@ describe('Utils', () => {
     });
 
     describe('Custom Link Actions', () => {
+      const originalUserAgent = navigator.userAgent;
+      before(() => {
+        window.navigator.share = sinon.stub().resolves();
+        Object.defineProperty(navigator, 'userAgent', {
+          value: 'android',
+          writable: true,
+        });
+      });
+
+      after(() => {
+        Object.defineProperty(navigator, 'userAgent', {
+          value: originalUserAgent,
+          writable: true,
+        });
+      });
+
       it('Implements a login action', async () => {
         await waitForElement('.login-action');
         const login = document.querySelector('.login-action');
         utils.decorateLinks(login);
-        expect(login.href).to.equal('https://www.stage.adobe.com/');
+        expect(login.href).to.equal('https://www.adobe.com/');
+      });
+      it('Implements a copy link action', async () => {
+        await waitForElement('.copy-action');
+        const copy = document.querySelector('.copy-action');
+        utils.decorateLinks(copy);
+        expect(copy.classList.contains('copy-link')).to.be.true;
+      });
+      it('triggers the event listener on clicking the custom links', async () => {
+        const login = document.querySelector('.login-action');
+        const copy = document.querySelector('.copy-action');
+        const clickEvent = new Event('click', { bubbles: true, cancelable: true });
+        const preventDefaultSpy = sinon.spy(clickEvent, 'preventDefault');
+        login.dispatchEvent(clickEvent);
+        copy.dispatchEvent(clickEvent);
+        expect(preventDefaultSpy.calledTwice).to.be.true;
+        expect(window.navigator.share.calledOnce).to.be.true;
+      });
+    });
+
+    describe('Aria label appendment', () => {
+      it('appends aria label if defined', () => {
+        const theText = 'Text';
+        const theAriaLabel = 'Aria label';
+
+        const noAriaLabelElem = document.querySelector('.aria-label-none');
+        expect(noAriaLabelElem.getAttribute('aria-label')).to.be.null;
+        expect(noAriaLabelElem.innerText).to.equal(theText);
+
+        const simpleAriaLabelElem = document.querySelector('.aria-label-simple');
+        expect(simpleAriaLabelElem.getAttribute('aria-label')).to.equal(theAriaLabel);
+        expect(simpleAriaLabelElem.innerText).to.equal(theText);
+
+        const pipedAriaLabelElem = document.querySelector('.aria-label-piped');
+        expect(pipedAriaLabelElem.getAttribute('aria-label')).to.equal(theAriaLabel);
+        expect(pipedAriaLabelElem.innerText).to.equal(`${theText} | Other text`);
+
+        const specialCharAriaLabelElem = document.querySelector('.aria-label--special-char');
+        expect(specialCharAriaLabelElem.getAttribute('aria-label')).to.equal(`${theAriaLabel} ~!@#$%^&*()-_=+[{/;:'",.?}] special characters`);
+        expect(specialCharAriaLabelElem.innerText).to.equal(theText);
+
+        const noSpacePipedAriaLabelElem = document.querySelector('.aria-label-piped--no-space');
+        expect(noSpacePipedAriaLabelElem.getAttribute('aria-label')).to.equal(theAriaLabel);
+        expect(noSpacePipedAriaLabelElem.innerText).to.equal(`${theText}|Other text`);
+
+        const iconNoAriaLabelElem = document.querySelector('.aria-label-icon-none');
+        expect(iconNoAriaLabelElem.getAttribute('aria-label')).to.be.null;
+        expect(iconNoAriaLabelElem.querySelector('.icon')).to.exist;
+        expect(iconNoAriaLabelElem.innerText).to.equal(theText);
+
+        const iconAriaLabelElem = document.querySelector('.aria-label-icon-simple');
+        expect(iconAriaLabelElem.getAttribute('aria-label')).to.equal(theAriaLabel);
+        expect(iconAriaLabelElem.querySelector('.icon')).to.exist;
+        expect(iconAriaLabelElem.innerText).to.equal(theText);
       });
     });
 
@@ -120,9 +301,10 @@ describe('Utils', () => {
     });
 
     it('Loads a script', async () => {
-      const script = await utils.loadScript('/test/utils/mocks/script.js', 'module');
+      const script = await utils.loadScript('/test/utils/mocks/script.js', 'module', { mode: 'async' });
       expect(script).to.exist;
       expect(script.type).to.equal('module');
+      expect(script.async).to.equal(true);
       await utils.loadScript('/test/utils/mocks/script.js', 'module');
       expect(script).to.exist;
     });
@@ -144,7 +326,7 @@ describe('Utils', () => {
 
     it('Does not setup nofollow links', async () => {
       window.fetch = mockFetch({ payload: { data: [] } });
-      await utils.loadDeferred(document, [], { links: 'on' }, () => {});
+      await utils.loadDeferred(document, [], { links: 'on' }, () => { });
       const gaLink = document.querySelector('a[href="https://analytics.google.com/"]');
       expect(gaLink.getAttribute('rel')).to.be.null;
     });
@@ -159,7 +341,7 @@ describe('Utils', () => {
       metaPath.content = '/test/utils/mocks/nofollow.json';
 
       document.head.append(metaOn, metaPath);
-      await utils.loadDeferred(document, [], { contentRoot: '' }, () => {});
+      await utils.loadDeferred(document, [], { contentRoot: '' }, () => { });
       const gaLink = document.querySelector('a[href^="https://analytics.google.com"]');
       expect(gaLink).to.exist;
     });
@@ -193,6 +375,9 @@ describe('Utils', () => {
       const paragraphs = [...document.querySelectorAll('p')];
       const lastPara = paragraphs.pop();
       expect(lastPara.textContent).to.equal(' inkl. MwSt.');
+      const plceholderhref = document.querySelector('.placeholder');
+      const hrefValue = plceholderhref.getAttribute('href');
+      expect(hrefValue).to.equal('tel:phone number substance');
     });
 
     it('Decorates meta helix url', () => {
@@ -244,13 +429,41 @@ describe('Utils', () => {
       newTabLink.href = newTabLink.href.replace('#_blank', '');
       expect(newTabLink.href).to.equal('https://www.adobe.com/test');
     });
-
+    it('Should send analytics alloy event', async () => {
+      window._satellite = { track: sinon.spy() };
+      const alloyMarquee = await readFile({ path: './mocks/body-marquee-alloy-cta.html' });
+      document.body.innerHTML = alloyMarquee;
+      await waitForElement('.marquee');
+      const marquee = document.querySelector('.marquee');
+      const alloyLink = marquee.querySelector('a');
+      const alloyString = alloyLink.href.split('#_')?.find((s) => s.startsWith('alloy:'));
+      expect(alloyLink.href).to.contain('#_alloy:');
+      utils.decorateLinks(marquee);
+      waitFor(() => {
+        expect(alloyLink.href).to.not.contain('#_alloy:');
+        alloyLink.click();
+        const [, profile, business, value] = alloyString.split(/:|\./g);
+        expect(window._satellite.track.calledOnce).to.be.true;
+        const eventName = window._satellite.track.args[0][0];
+        const eventPayload = window._satellite.track.args[0][1];
+        expect(eventName).to.equal('event');
+        // eslint-disable-next-line no-underscore-dangle
+        expect(eventPayload.data.__adobe.target).to.deep.equal({ [`${profile}.${business}`]: value });
+      }, 10);
+    });
     it('Add rel=nofollow to a link', () => {
       const noFollowContainer = document.querySelector('main div');
       utils.decorateLinks(noFollowContainer);
       const noFollowLink = noFollowContainer.querySelector('.no-follow');
       expect(noFollowLink.rel).to.contain('nofollow');
       expect(noFollowLink.href).to.equal('https://www.adobe.com/test');
+    });
+
+    it('Add data-attribute "data-http-link" if http shceme found', () => {
+      const linksContainer = document.querySelector('main div');
+      utils.decorateLinks(linksContainer);
+      const httpLink = linksContainer.querySelector('[data-http-link]');
+      expect(httpLink.dataset.httpLink).to.equal('true');
     });
 
     it('Sets up milo.deferredPromise', async () => {
@@ -339,7 +552,6 @@ describe('Utils', () => {
         config.pathname = path;
         utils.setConfig(config);
       }
-
       it('Same domain link is relative and localized', () => {
         expect(utils.localizeLink('https://main--milo--adobecom.hlx.page/gnav/solutions', 'main--milo--adobecom.hlx.page')).to.equal('/be_fr/gnav/solutions');
       });
@@ -432,51 +644,171 @@ describe('Utils', () => {
       expect(block).to.be.null;
       expect(document.querySelector('.quote.hide-block')).to.be.null;
     });
+  });
 
-    it('should convert prod links to stage links on stage env', async () => {
-      const stageDomainsMap = {
-        'www.adobe.com': 'www.stage.adobe.com',
-        'blog.adobe.com': 'blog.stage.adobe.com',
-        'business.adobe.com': 'business.stage.adobe.com',
-        'helpx.adobe.com': 'helpx.stage.adobe.com',
-        'news.adobe.com': 'news.stage.adobe.com',
+  describe('stageDomainsMap', () => {
+    it('should convert links when stageDomainsMap provided without regex', async () => {
+      const stageConfig = {
+        ...config,
+        locale: { prefix: '/ae_ar' },
+        env: { name: 'stage' },
+        stageDomainsMap,
       };
-      utils.setConfig({
+
+      Object.entries(stageDomainsMap).forEach(([hostname, domainsMap]) => {
+        const anchors = Object.keys(domainsMap).map((d) => utils.createTag('a', { href: `https://${d}` }));
+        const localizedAnchors = Object.keys(domainsMap).map((d) => utils.createTag('a', { href: `https://${d}/ae_ar` }));
+        const externalAnchors = externalDomains.map((url) => utils.createTag('a', { href: url }));
+
+        utils.convertStageLinks({
+          anchors: [...anchors, ...localizedAnchors, ...externalAnchors],
+          config: stageConfig,
+          hostname,
+          href: `https://${hostname}`,
+        });
+
+        anchors.forEach((a, index) => {
+          const expectedDomain = Object.values(domainsMap)[index];
+          expect(a.href).to.contain(expectedDomain === 'origin' ? hostname : expectedDomain);
+        });
+
+        externalAnchors.forEach((a) => expect(a.href).to.equal(a.href));
+      });
+    });
+
+    it('should convert links when stageDomainsMap provided with regex', async () => {
+      const { hostname, map } = stageDomainsMapWRegex;
+      const stageConfigWRegex = {
+        ...config,
+        locale: { prefix: '/de' },
+        env: { name: 'stage' },
+        stageDomainsMap: map,
+      };
+
+      Object.entries(map).forEach(([, domainsMap]) => {
+        const anchors = Object.keys(domainsMap).map((d) => utils.createTag('a', { href: d.replace('^', '') }));
+        const localizedAnchors = Object.keys(domainsMap).map((d) => {
+          const convertedUrl = new URL(d.replace('^', ''));
+          convertedUrl.pathname = `de/${convertedUrl.pathname}`;
+          return utils.createTag('a', { href: convertedUrl.toString() });
+        });
+        const externalAnchors = externalDomains.map((url) => utils.createTag('a', { href: url }));
+
+        utils.convertStageLinks({
+          anchors: [...anchors, ...localizedAnchors, ...externalAnchors],
+          config: stageConfigWRegex,
+          hostname,
+          href: `https://${hostname}`,
+        });
+
+        anchors.forEach((a, index) => {
+          const expectedDomain = Object.values(domainsMap)[index];
+          expect(a.href).to.contain(expectedDomain === 'origin' ? hostname : expectedDomain);
+        });
+
+        externalAnchors.forEach((a) => expect(a.href).to.equal(a.href));
+      });
+    });
+
+    it('should not convert links when no stageDomainsMap provided', async () => {
+      const stageConfig = {
+        ...config,
+        env: { name: 'stage' },
+      };
+
+      Object.entries(stageDomainsMap).forEach(([hostname, domainsMap]) => {
+        const anchors = Object.keys(domainsMap).map((d) => utils.createTag('a', { href: `https://${d}` }));
+        const externalAnchors = externalDomains.map((url) => utils.createTag('a', { href: url }));
+
+        utils.convertStageLinks({
+          anchors: [...anchors, ...externalAnchors],
+          config: stageConfig,
+          hostname,
+        });
+
+        [...anchors, ...externalAnchors].forEach((a) => expect(a.href).to.equal(a.href));
+      });
+    });
+
+    it('should remove extensions upon conversion', async () => {
+      const stageConfig = {
         ...config,
         env: { name: 'stage' },
         stageDomainsMap,
+      };
+
+      Object.entries(stageDomainsMap).forEach(([hostname, domainsMap]) => {
+        const extension = '.html';
+        const anchors = Object.keys(domainsMap).map((d) => utils.createTag('a', { href: `https://${d}/abc${extension}` }));
+
+        utils.convertStageLinks({
+          anchors: [...anchors],
+          config: stageConfig,
+          hostname,
+        });
+
+        anchors.forEach((a) => {
+          if (/\.page|\.live/.test(a.href)) {
+            expect(a.href).to.not.contain(extension);
+          } else {
+            expect(a.href).to.contain(extension);
+          }
+        });
       });
-      const links = Object.keys(stageDomainsMap).map((prodDom) => document.body.appendChild(createTag('a', { href: `https://${prodDom}`, 'data-prod-dom': prodDom })));
-      await utils.decorateLinks(document.body);
-      links.forEach((l) => expect(l.hostname === stageDomainsMap[l.dataset.prodDom]).to.be.true);
+    });
+
+    it('should not convert links on prod', async () => {
+      const prodConfig = {
+        ...config,
+        env: { name: 'prod' },
+        stageDomainsMap,
+      };
+
+      prodDomains.forEach((hostname) => {
+        const anchors = prodDomains.map((d) => utils.createTag('a', { href: `https://${d}` }));
+        const externalAnchors = externalDomains.map((url) => utils.createTag('a', { href: url }));
+
+        utils.convertStageLinks({
+          anchors: [...anchors, ...externalAnchors],
+          config: prodConfig,
+          hostname,
+        });
+
+        [...anchors, ...externalAnchors].forEach((a) => expect(a.href).to.equal(a.href));
+      });
     });
   });
 
+  // MARK: title-append
   describe('title-append', async () => {
     beforeEach(async () => {
       document.head.innerHTML = await readFile({ path: './mocks/head-title-append.html' });
+      document.body.innerHTML = body;
     });
     it('should append to title using string from metadata', async () => {
       const expected = 'Document Title NOODLE';
       await utils.loadArea();
-      await waitFor(() => document.title === expected);
       expect(document.title).to.equal(expected);
+      expect(document.querySelector('meta[property="og:title"]')?.getAttribute('content'), expected);
+      expect(document.querySelector('meta[name="twitter:title"]')?.getAttribute('content'), expected);
     });
   });
 
+  // MARK: seotech
   describe('seotech', async () => {
     beforeEach(async () => {
       window.lana = { log: (msg) => console.error(msg) };
       document.head.innerHTML = await readFile({ path: './mocks/head-seotech-video.html' });
+      document.body.innerHTML = body;
     });
     afterEach(() => {
       window.lana.release?.();
     });
     it('should import feature when metadata is defined and error if invalid', async () => {
-      const expectedError = 'SEOTECH: Failed to construct \'URL\': Invalid URL';
+      const expectedError = 'SEOTECH: Invalid video url: FAKE';
       await utils.loadArea();
       const lanaStub = sinon.stub(window.lana, 'log');
-      await waitFor(() => lanaStub.calledOnceWith(expectedError));
+      await waitFor(() => lanaStub.calledOnceWith(expectedError), 2000);
       expect(lanaStub.calledOnceWith(expectedError)).to.be.true;
     });
   });
@@ -487,7 +819,7 @@ describe('Utils', () => {
       div.className = 'global-navigation';
       document.body.appendChild(div);
       window.location.hash = '#not-block';
-      window.scrollBy = () => {};
+      window.scrollBy = () => { };
     });
 
     it('should scroll to the hashed element', () => {
@@ -643,7 +975,7 @@ describe('Utils', () => {
       const resultExperiment = resultConfig.mep.experiments[0];
       expect(resultConfig.mep.preview).to.be.true;
       expect(resultConfig.mep.experiments.length).to.equal(3);
-      expect(resultExperiment.manifest).to.equal('https://main--milo--adobecom.hlx.page/products/special-offers-manifest.json');
+      expect(resultExperiment.manifest).to.equal('/products/special-offers-manifest.json');
     });
   });
 
@@ -667,6 +999,383 @@ describe('Utils', () => {
       block3.setAttribute('data-modal-path', 'modalPath2');
       const blocks = [block1, block2, block3];
       expect(utils.filterDuplicatedLinkBlocks(blocks)).to.deep.equal([block1, block2]);
+    });
+  });
+
+  describe('localNav', async () => {
+    it('Preserving space to avoid CLS issue', async () => {
+      document.body.innerHTML = body;
+      const footer = document.createElement('footer');
+      footer.innerHTML = '<p>Footer Content</p>';
+      document.body.appendChild(footer);
+      document.head.innerHTML = await readFile({ path: './mocks/head-localNav.html' });
+      document.body.appendChild(document.createElement('header'));
+      await utils.loadArea();
+      console.log(document.querySelector('.feds-localnav'));
+      expect(document.querySelector('.feds-localnav')).to.exist;
+    });
+  });
+
+  describe('loadFooter', async () => {
+    it('Should load if footer meta is not off', async () => {
+      const footer = document.createElement('footer');
+      footer.innerHTML = '<p>Footer Content</p>';
+      document.body.appendChild(footer);
+      await utils.loadArea();
+      expect(document.querySelector('footer')).to.exist;
+    });
+    it('Should load if footer is  off', async () => {
+      const metaTag = document.createElement('meta');
+      metaTag.setAttribute('name', 'footer');
+      metaTag.setAttribute('content', 'off');
+      document.head.appendChild(metaTag);
+
+      const footer = document.createElement('footer');
+      footer.innerHTML = '<p>Footer Content</p>';
+      document.body.appendChild(footer);
+      await utils.loadArea();
+      expect(document.querySelector('footer')).to.exist;
+
+      metaTag.setAttribute('name', 'footer');
+      metaTag.setAttribute('content', 'on');
+      document.head.appendChild(metaTag);
+    });
+  });
+  describe('isTrustedAutoBlock', () => {
+    const { origin } = window.location;
+    const autoBlocks = [
+      ['tv.adobe.com', 'https://tv.adobe.com/v1/123', true],
+      ['tv.adobe.com', 'https://tv.notadobe.com/v1/123', false],
+      ['tv.adobe.com', 'https://tv.notadobe.com/v1/123?url=tv.adobe.com/v1/123', false],
+      ['gist.github.com', 'https://gist.github.com/valid-gist', true],
+      ['gist.github.com', 'https://gist.github-not.com/invalid-gist', false],
+      ['/tools/caas', `${origin}/tools/caas`, true],
+      ['/tools/caas', 'https://adobe.com/tools/caas', true],
+      ['/tools/caas', 'https://unknown-origin.com/tools/caas', false],
+      ['/tools/faas', `${origin}/tools/faas`, true],
+      ['/tools/faas', 'https://unknown-origin.com/tools/faas', false],
+      ['/tools/faas', 'https://fake-adobe.com/tools/faas', false],
+      ['/tools/faas', 'https://adobe.com/tools/faas', true],
+      ['/fragments/', `${origin}/fragments/test`, true],
+      ['/fragments/', 'https://adobe.com/fragments/test', true],
+      ['/fragments/', 'https://unknown-origin.com/fragments/test', false],
+      ['instagram.com', 'https://www.instagram.com/test', true],
+      ['instagram.com', 'https://not-instagram.com/test', false],
+      ['slideshare.net', 'https://slideshare.net', true],
+      ['slideshare.net', 'https://not-slideshare.net', false],
+      ['tiktok.com', 'https://www.tiktok.com/test-test', true],
+      ['tiktok.com', 'https://tiktok-not.com/test-test', false],
+      ['twitter.com', 'https://twitter.com/test', true],
+      ['twitter.com', 'https://not-twitter.com/test', false],
+      ['vimeo.com', 'https://vimeo.com/test', true],
+      ['vimeo.com', 'https://fake-vimeo.com/test', false],
+      ['player.vimeo.com', 'https://player.vimeo.com/test', true],
+      ['player.vimeo.com', 'https://false-player.vimeo.com/test', false],
+      ['youtube.com', 'https://www.youtube.com/test', true],
+      ['youtube.com', 'https://www.not-youtube.com/test', false],
+      ['youtu.be', 'https://youtu.be/test', true],
+      ['youtu.be', 'https://fake-youtu.be/test', false],
+      ['.pdf', 'https://adobe.com/test.pdf', true],
+      ['.pdf', 'https://other-website.com/test.pdf', true],
+      ['.mp4', `${origin}/media_1234.mp4`, true],
+      ['.mp4', `${origin}/media_1234.mp3`, false],
+      ['.mp4', 'https://fake-website.com/media_1234.mp4', false],
+      ['.mp4', 'https://main--milo--adobecom.hlx.page/media_1234.mp4', true],
+      ['.mp4', 'https://main--milo--adobecom.hlx.live/media_1234.mp4', true],
+      ['.mp4', 'https://main--milo--adobecom.aem.page/media_1234.mp4', true],
+      ['.mp4', 'https://main--milo--adobecom.aem.live/media_1234.mp4', true],
+      ['.mp4', 'https://adobe.com/media_1234.mp4', true],
+      ['/tools/ost?', `${origin}/tools/ost?test=test`, true],
+      ['/tools/ost?', 'https://adobe.com/tools/ost?test=test', true],
+      ['/tools/ost?', 'https://fake-website.com/tools/ost?test=test', false],
+      ['mas.adobe.com/studio', 'https://mas.adobe.com/studio', true],
+      ['mas.adobe.com/studio', 'https://mas.not-adobe.com/studio', false],
+      ['/miniplans', `${origin}/miniplans`, true],
+      ['/miniplans', 'https://adobe.com/miniplans', true],
+      ['/miniplans', 'https://fake-website.com/miniplans', false],
+      ['/creativecloud/business-plans.html', `${origin}/creativecloud/business-plans.html`, true],
+      ['/creativecloud/business-plans.html', 'https://adobe.com/creativecloud/business-plans.html', true],
+      ['/creativecloud/business-plans.html', 'https://fake-website/creativecloud/business-plans.html', false],
+      ['/creativecloud/education-plans.html', `${origin}/creativecloud/education-plans.html`, true],
+      ['/creativecloud/education-plans.html', 'https://adobe.com/creativecloud/education-plans.html', true],
+      ['/creativecloud/education-plans.html', 'https://fake-website/creativecloud/education-plans.html', false],
+      ['not-block', 'https://example.com', false],
+    ];
+    it('Should return true if autoblock has trusted source', () => {
+      autoBlocks.forEach(([block, url, isValid]) => {
+        const isValidAutoBlock = utils.isTrustedAutoBlock(block, new URL(url));
+        expect(isValidAutoBlock).to.be[isValid];
+      });
+    });
+  });
+
+  describe('Localization Logic', () => {
+    // Base config with common properties
+    const baseConfig = {
+      locales: { '': { ietf: 'en-US', tk: 'hah7vzn.css' } },
+      prodDomains: ['news.adobe.com'],
+      contentRoot: '/root',
+    };
+
+    // --- Tests for localizeLink ---
+    describe('localizeLink', () => {
+      it('uses locale prefix when no language-based logic applies', () => {
+        utils.setConfig({
+          ...baseConfig,
+          pathname: '/de/',
+          locales: {
+            ...baseConfig.locales,
+            de: { ietf: 'de-DE', tk: 'hah7vzn.css' },
+          },
+        });
+        const href = 'https://examplesite.com/path';
+        const result = utils.localizeLink(href, 'examplesite.com');
+        expect(utils.getConfig().locale.prefix).to.equal('/de');
+        expect(result).to.equal('/de/path');
+      });
+
+      it('adjusts prefix to locale when no site match', () => {
+        utils.setConfig({
+          ...baseConfig,
+          pathname: '/ch_de/',
+          languages: {
+            de: {
+              ietf: 'de',
+              tk: 'hah7vzn.css',
+              regions: [{ region: 'ch', ietf: 'de-CH', tk: 'hah7vzn.css' }],
+            },
+          },
+          locales: {
+            ...baseConfig.locales,
+            ch_de: { ietf: 'ch-DE', tk: 'hah7vzn.css' },
+          },
+        });
+        const href = 'https://othersite.com/path';
+        const result = utils.localizeLink(href, 'othersite.com');
+        expect(utils.getConfig().locale.prefix).to.equal('/ch_de');
+        expect(utils.getConfig().locale.language).to.be.undefined;
+        expect(result).to.equal('/ch_de/path');
+      });
+
+      it('keeps language-based prefix when site matches and language is valid', async () => {
+        const mockConfig = {
+          'locale-to-language-map': { data: [] },
+          'site-languages': {
+            data: [
+              {
+                domainMatches: 'news.adobe.com\n--news--adobecom.',
+                languages: 'en\nen/gb\nde',
+              },
+            ],
+          },
+        };
+        window.fetch = async () => ({
+          ok: true,
+          json: () => Promise.resolve(mockConfig),
+        });
+        utils.setConfig({
+          ...baseConfig,
+          pathname: '/en/gb/',
+          languages: {
+            en: {
+              ietf: 'en',
+              tk: 'hah7vzn.css',
+              regions: [{ region: 'gb', ietf: 'en-GB', tk: 'hah7vzn.css' }],
+            },
+          },
+        });
+        await utils.loadLanguageConfig();
+        const href = 'https://news.adobe.com/path';
+        const result = utils.localizeLink(href, 'news.adobe.com');
+        expect(utils.getConfig().locale.prefix).to.equal('/en/gb');
+        expect(utils.getConfig().locale.language).to.equal('en');
+        expect(result).to.equal('/en/gb/path');
+      });
+
+      it('maps to locale prefix when site matches but language is invalid', async () => {
+        const mockConfig = {
+          'locale-to-language-map': { data: [{ locale: 'ch_de', languagePath: 'de/ch' }] },
+          'site-languages': {
+            data: [
+              {
+                domainMatches: 'news.adobe.com\n--news--adobecom.',
+                languages: 'en\nfr',
+              },
+            ],
+          },
+        };
+        window.fetch = async () => ({
+          ok: true,
+          json: () => Promise.resolve(mockConfig),
+        });
+        utils.setConfig({
+          ...baseConfig,
+          pathname: '/de/ch/',
+          languages: {
+            de: {
+              ietf: 'de',
+              tk: 'hah7vzn.css',
+              regions: [{ region: 'ch', ietf: 'de-CH', tk: 'hah7vzn.css' }],
+            },
+          },
+          locales: {
+            ...baseConfig.locales,
+            ch_de: { ietf: 'de-CH', tk: 'hah7vzn.css' },
+          },
+        });
+        await utils.loadLanguageConfig();
+        const href = 'https://news.adobe.com/path';
+        const result = utils.localizeLink(href);
+        expect(utils.getConfig().locale.prefix).to.equal('/de/ch');
+        expect(utils.getConfig().locale.language).to.equal('de');
+        expect(result).to.equal('https://news.adobe.com/ch_de/path');
+      });
+
+      it('uses locale prefix for non-language-based when site matches but no language', async () => {
+        const mockConfig = {
+          'locale-to-language-map': { data: [{ locale: 'ch_de', languagePath: 'de/ch' }] },
+          'site-languages': {
+            data: [
+              {
+                domainMatches: 'news.adobe.com\n--news--adobecom.',
+                languages: 'en\nfr',
+              },
+            ],
+          },
+        };
+        window.fetch = async () => ({
+          ok: true,
+          json: () => Promise.resolve(mockConfig),
+        });
+        utils.setConfig({
+          ...baseConfig,
+          pathname: '/ch_de/',
+          locales: {
+            ...baseConfig.locales,
+            ch_de: { ietf: 'de-CH', tk: 'hah7vzn.css' },
+          },
+        });
+        await utils.loadLanguageConfig();
+        const href = 'https://news.adobe.com/path';
+        const result = utils.localizeLink(href, 'news.adobe.com');
+        expect(utils.getConfig().locale.prefix).to.equal('/ch_de');
+        expect(utils.getConfig().locale.language).to.be.undefined;
+        expect(result).to.equal('/ch_de/path');
+      });
+
+      it('set correct prefix for US site with only language', async () => {
+        utils.setConfig({
+          pathname: '/',
+          languages: { en: { tk: 'hah7vzn.css' } },
+        });
+        const href = '/path';
+        const result = utils.localizeLink(href);
+        expect(utils.getConfig().locale.prefix).to.equal('');
+        expect(utils.getConfig().locale.language).to.equal('en');
+        expect(result).to.equal('/path');
+      });
+
+      it('skips language logic on localhost', () => {
+        utils.setConfig({
+          ...baseConfig,
+          pathname: '/de/ch/',
+          languages: {
+            de: {
+              ietf: 'de',
+              tk: 'hah7vzn.css',
+              regions: [{ region: 'ch', ietf: 'de-CH', tk: 'hah7vzn.css' }],
+            },
+          },
+          locales: {
+            ...baseConfig.locales,
+            ch_de: { ietf: 'de-CH', tk: 'hah7vzn.css' },
+          },
+        });
+        const href = 'http://localhost/path';
+        const result = utils.localizeLink(href);
+        expect(utils.getConfig().locale.prefix).to.equal('/de/ch');
+        expect(utils.getConfig().locale.language).to.equal('de');
+        expect(result).to.equal('/de/ch/path');
+      });
+    });
+
+    // --- Tests for hasLanguageLinks ---
+    describe('hasLanguageLinks', () => {
+      const testPaths = [
+        'news.adobe.com',
+        'adobe.com/express/',
+        'adobe.com/**/express/',
+        'adobe.com/**_**/express/',
+      ];
+
+      it('should return true for news.adobe.com links', () => {
+        const link = createTag('a', { href: 'https://news.adobe.com/some/path' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.true;
+      });
+
+      it('should return true for express links without locale', () => {
+        const link = createTag('a', { href: 'https://adobe.com/express/' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.true;
+      });
+
+      it('should return true for express links with two-letter locale', () => {
+        const link = createTag('a', { href: 'https://adobe.com/de/express/' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.true;
+      });
+
+      it('should return true for express links with locale_region', () => {
+        const link = createTag('a', { href: 'https://adobe.com/de_de/express/' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.true;
+      });
+
+      it('should return true for express links with uppercase locale', () => {
+        const link = createTag('a', { href: 'https://adobe.com/DE/express/' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.true;
+      });
+
+      it('should return true for express links with uppercase locale_region', () => {
+        const link = createTag('a', { href: 'https://adobe.com/DE_DE/express/' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.true;
+      });
+
+      it('should return false for non-matching express links', () => {
+        const link = createTag('a', { href: 'https://adobe.com/other/express/' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.false;
+      });
+
+      it('should return false for express links with invalid locale format', () => {
+        const link = createTag('a', { href: 'https://adobe.com/123/express/' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.false;
+      });
+
+      it('should return false for non-matching domains', () => {
+        const link = createTag('a', { href: 'https://example.com/express/' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.false;
+      });
+
+      it('should handle multiple links and return true if any match', () => {
+        const area = createTag('div', {}, [
+          createTag('a', { href: 'https://example.com/' }),
+          createTag('a', { href: 'https://adobe.com/de/express/' }),
+          createTag('a', { href: 'https://other.com/' }),
+        ]);
+        expect(utils.hasLanguageLinks(area, testPaths)).to.be.true;
+      });
+
+      it('should use default LANGUAGE_BASED_PATHS when no paths provided', () => {
+        const link = createTag('a', { href: 'https://news.adobe.com/some/path' });
+        const area = createTag('div', {}, link);
+        expect(utils.hasLanguageLinks(area)).to.be.true;
+      });
     });
   });
 });

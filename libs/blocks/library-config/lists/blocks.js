@@ -1,5 +1,5 @@
 import { createTag } from '../../../utils/utils.js';
-import createCopy from '../library-utils.js';
+import createCopy, { isMatching } from '../library-utils.js';
 import { getMetadata } from '../../section-metadata/section-metadata.js';
 
 const LIBRARY_METADATA = 'library-metadata';
@@ -116,7 +116,8 @@ export function getHtml(container, path) {
 
     const isBlock = element.nodeName === 'DIV' && element.className;
     const content = isBlock ? getTable(element) : element.outerHTML;
-    return `${acc}${content}`;
+    const brTop = !acc || acc.endsWith('<br>') ? '' : BLOCK_SPACING;
+    return `${acc}${brTop}${content}${BLOCK_SPACING}`;
   }, '');
 }
 
@@ -130,13 +131,6 @@ export function getSearchTags(container) {
       : containerName;
   }
   return containerName;
-}
-
-export function isMatching(container, query) {
-  const tagsString = getSearchTags(container);
-  if (!query || !tagsString) return false;
-  const searchTokens = query.split(' ');
-  return searchTokens.every((token) => tagsString.toLowerCase().includes(token.toLowerCase()));
 }
 
 function getBlockType(subSection, withinContainer) {
@@ -247,7 +241,7 @@ export function getContainers(doc) {
   return containers;
 }
 
-export default async function loadBlocks(blocks, list, query) {
+export default async function loadBlocks(blocks, list, query, type) {
   list.textContent = '';
   blocks.forEach(async (block) => {
     const titleText = createTag('p', { class: 'item-title' }, block.name);
@@ -277,7 +271,6 @@ export default async function loadBlocks(blocks, list, query) {
     const html = await resp.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-
     const containers = getContainers(doc);
     let matchingContainerFound = false;
 
@@ -291,14 +284,13 @@ export default async function loadBlocks(blocks, list, query) {
         const containerHtml = getHtml(container, block.path);
         e.target.classList.add('copied');
         setTimeout(() => { e.target.classList.remove('copied'); }, 3000);
-        const blob = new Blob([`${BLOCK_SPACING}${containerHtml}${BLOCK_SPACING}`], { type: 'text/html' });
+        const blob = new Blob([containerHtml], { type: 'text/html' });
         createCopy(blob);
-        window.hlx?.rum.sampleRUM('click', { source: e.target });
       });
       item.append(name, copy);
 
       if (query) {
-        if (isMatching(container, query)) {
+        if (isMatching(container, query, type)) {
           matchingContainerFound = true;
         } else {
           item.classList.add('is-hidden');

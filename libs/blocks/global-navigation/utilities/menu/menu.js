@@ -1,8 +1,8 @@
+import { processTrackingLabels } from '../../../../martech/attributes.js';
+import { getConfig, shouldBlockFreeTrialLinks } from '../../../../utils/utils.js';
 import {
-  decorateCta,
   fetchAndProcessPlainHtml,
   getActiveLink,
-  getAnalyticsValue,
   icons,
   isDesktop,
   logErrorFor,
@@ -12,7 +12,39 @@ import {
   trigger,
   yieldToMain,
   addMepHighlightAndTargetId,
+  getAsyncDropdownCount,
+  setActiveLink,
+  getDisableAEDState,
+  hasActiveLink,
+  setAriaAtributes,
 } from '../utilities.js';
+
+function getAnalyticsValue(str, index) {
+  if (typeof str !== 'string' || !str.length) return str;
+
+  let analyticsValue = processTrackingLabels(str, getConfig(), 30);
+  analyticsValue = typeof index === 'number' ? `${analyticsValue}-${index}` : analyticsValue;
+
+  return analyticsValue;
+}
+
+function decorateCta({ elem, type = 'primaryCta', index } = {}) {
+  if (shouldBlockFreeTrialLinks({
+    button: elem,
+    localePrefix: getConfig()?.locale?.prefix,
+    parent: elem.parentElement,
+  })) return null;
+  const modifier = type === 'secondaryCta' ? 'secondary' : 'primary';
+
+  const clone = elem.cloneNode(true);
+  clone.className = `feds-cta feds-cta--${modifier}`;
+  clone.setAttribute('daa-ll', getAnalyticsValue(clone.textContent, index));
+
+  return toFragment`
+    <div class="feds-cta-wrapper">
+      ${clone}
+    </div>`;
+}
 
 const decorateHeadline = (elem, index) => {
   if (!(elem instanceof HTMLElement)) return null;
@@ -20,6 +52,12 @@ const decorateHeadline = (elem, index) => {
   const headline = toFragment`<div class="feds-menu-headline">
       ${elem.textContent.trim()}
     </div>`;
+
+  const headlineClickHandler = (e) => {
+    if (isDesktop.matches) return;
+    trigger({ element: headline, event: e, type: 'headline' });
+    setActiveDropdown(headline);
+  };
 
   const setHeadlineAttributes = () => {
     if (isDesktop.matches) {
@@ -29,6 +67,7 @@ const decorateHeadline = (elem, index) => {
       headline.removeAttribute('aria-haspopup', true);
       headline.removeAttribute('aria-expanded', false);
       headline.removeAttribute('daa-ll');
+      headline.removeEventListener('click', headlineClickHandler);
     } else {
       headline.setAttribute('role', 'button');
       headline.setAttribute('tabindex', 0);
@@ -36,18 +75,12 @@ const decorateHeadline = (elem, index) => {
       headline.setAttribute('aria-haspopup', true);
       headline.setAttribute('aria-expanded', false);
       headline.setAttribute('daa-ll', getAnalyticsValue(headline.textContent, index));
+      headline.addEventListener('click', headlineClickHandler);
     }
   };
 
   setHeadlineAttributes();
   isDesktop.addEventListener('change', setHeadlineAttributes);
-
-  headline.addEventListener('click', (e) => {
-    if (isDesktop.matches) return;
-
-    trigger({ element: headline, event: e, type: 'headline' });
-    setActiveDropdown(headline);
-  });
 
   // Since heading is turned into a div, it can be safely removed
   elem.remove();
@@ -71,13 +104,23 @@ const decorateLinkGroup = (elem, index) => {
       <div class="feds-navLink-title">${link.textContent}</div>
       ${descriptionElem}
     </div>` : '';
-  const linkGroup = toFragment`<a
+  let linkGroup = toFragment`<a
     href="${link.href}"
     class="feds-navLink${modifierClasses.length ? ` ${modifierClasses.join(' ')}` : ''}"
     daa-ll="${getAnalyticsValue(link.textContent, index)}">
       ${imageElem}
       ${contentElem}
     </a>`;
+  if (linkGroup.classList.contains('feds-navLink--header')) {
+    linkGroup = toFragment`<div
+      role="heading"
+      aria-level="3"
+      class="feds-navLink${modifierClasses.length ? ` ${modifierClasses.join(' ')}` : ''}"
+      daa-ll="${getAnalyticsValue(link.textContent, index)}">
+        ${imageElem}
+        ${contentElem}
+      </div>`;
+  }
   if (link?.target) linkGroup.target = link.target;
 
   return linkGroup;
@@ -113,7 +156,7 @@ const decorateElements = ({ elem, className = 'feds-navLink', itemIndex = { posi
 
   // If the element is a link, decorate it and return it directly
   if (elem.matches(linkSelector)) {
-    return decorateLink(elem);
+    return toFragment`<li>${decorateLink(elem)}</li>`;
   }
 
   // Otherwise, this might be a collection of elements;
@@ -125,16 +168,35 @@ const decorateElements = ({ elem, className = 'feds-navLink', itemIndex = { posi
   return elem;
 };
 
+const decorateGnavImage = (elem) => {
+  const linkElem = elem.querySelector('a');
+  const imageElem = elem.querySelector('picture');
+  const promoImageElem = linkElem instanceof HTMLElement
+    ? toFragment`<a class="feds-image" href="${linkElem.href}" daa-ll="gnav-image">${imageElem}</a>`
+    : toFragment`<div class="feds-image">${imageElem}</div>`;
+
+  elem.replaceChildren(promoImageElem);
+  return toFragment`<div class="feds-image-wrapper">${elem}</div>`;
+};
+
 // Current limitation: we can only add one link
 const decoratePromo = (elem, index) => {
   const isDarkTheme = elem.matches('.dark');
   const isImageOnly = elem.matches('.image-only');
+  const promoHeader = elem.querySelector('p > strong');
   const imageElem = elem.querySelector('picture');
 
   if (!isImageOnly) {
     const content = [...elem.querySelectorAll(':scope > div')]
       .find((section) => !(section.querySelector('picture') instanceof HTMLElement));
     content?.classList.add('feds-promo-content');
+  }
+
+  if (promoHeader?.textContent.trim()) {
+    const headingElem = toFragment`<h2 class="feds-promo-header">
+        ${promoHeader.textContent.trim()}
+      </h2>`;
+    promoHeader.parentElement.replaceWith(headingElem);
   }
 
   decorateElements({ elem, className: 'feds-promo-link', index });
@@ -145,7 +207,7 @@ const decoratePromo = (elem, index) => {
     let promoImageElem;
 
     if (linkElem instanceof HTMLElement) {
-      promoImageElem = toFragment`<a class="feds-promo-image" href="${linkElem.href}">
+      promoImageElem = toFragment`<a class="feds-promo-image" href="${linkElem.href}" daa-ll="promo-image">
           ${imageElem}
         </a>`;
     } else {
@@ -176,7 +238,7 @@ const decoratePromo = (elem, index) => {
     elem.classList.add('feds-promo--dark');
   }
 
-  return toFragment`<div class="feds-promo-wrapper">
+  return toFragment`<div class="feds-promo-wrapper" daa-lh="promo-card">
       ${elem}
     </div>`;
 };
@@ -251,15 +313,35 @@ const decorateColumns = async ({ content, separatorTagName = 'H5' } = {}) => {
         const promoElem = decoratePromo(columnElem, itemIndex);
 
         itemDestination.append(promoElem);
+      } else if (columnElem.matches('.gnav-image')) {
+        resetDestination();
+        itemIndex.position = 0;
+        const imageElem = decorateGnavImage(columnElem, itemIndex);
+
+        itemDestination.append(imageElem);
       } else {
-        const decoratedElem = decorateElements({ elem: columnElem, itemIndex });
+        let decoratedElem = decorateElements({ elem: columnElem, itemIndex });
         columnElem.remove();
 
         // If an items template has been previously created,
         // add the current element to it;
         // otherwise append the element to the section
         const elemDestination = menuItems || itemDestination;
-        elemDestination.append(decoratedElem);
+        let menuList = null;
+        if (decoratedElem.tagName === 'P') {
+          decoratedElem = toFragment`<li>${decoratedElem.innerHTML}</li>`;
+        }
+        if (decoratedElem.tagName === 'LI') {
+          let ul = elemDestination.querySelector('ul');
+          if (!ul) {
+            ul = toFragment`<ul></ul>`;
+            elemDestination.append(ul);
+          }
+          menuList = ul;
+        } else {
+          menuList = elemDestination;
+        }
+        menuList.append(decoratedElem);
       }
     }
 
@@ -287,6 +369,7 @@ const decorateCrossCloudMenu = (content) => {
 
 // Current limitation: after an h5 (or h2 in the case of the footer)
 // is found in a menu column, no new sections can be created without a heading
+let asyncDropDownCount = 0;
 const decorateMenu = (config) => logErrorFor(async () => {
   let menuTemplate;
   if (config.type === 'syncDropdownTrigger') {
@@ -304,13 +387,13 @@ const decorateMenu = (config) => logErrorFor(async () => {
   }
 
   if (config.type === 'asyncDropdownTrigger') {
+    performance.mark(`DecorateMenu-${asyncDropDownCount}-Start`);
     const pathElement = config.item.querySelector('a');
     if (!(pathElement instanceof HTMLElement)) return;
 
     const content = await fetchAndProcessPlainHtml({ url: pathElement.href });
 
     if (!content) return;
-
     const menuContent = toFragment`<div class="feds-menu-content">${content.innerHTML}</div>`;
     menuTemplate = toFragment`<div class="feds-popup">
         <div class="feds-menu-container">
@@ -332,24 +415,41 @@ const decorateMenu = (config) => logErrorFor(async () => {
         config.template.classList.remove(selectors.deferredActiveNavItem.slice(1));
       };
 
+      config.template.classList.add(selectors.activeNavItem.slice(1));
       if (isDesktop.matches) {
         config.template.style.width = `${config.template.offsetWidth}px`;
         config.template.classList.add(selectors.deferredActiveNavItem.slice(1));
         isDesktop.addEventListener('change', resetActiveState, { once: true });
         window.addEventListener('feds:navOverflow', resetActiveState, { once: true });
       }
-
-      config.template.classList.add(selectors.activeNavItem.slice(1));
     }
 
+    asyncDropDownCount += 1;
+    menuTemplate.setAttribute('id', `feds-popup-${asyncDropDownCount}`);
     config.template.classList.add('feds-navItem--megaMenu');
+    if (getAsyncDropdownCount() === asyncDropDownCount) {
+      if (!hasActiveLink()) {
+        const sections = document.querySelectorAll('.feds-nav .feds-navItem--megaMenu');
+        const disableAED = getDisableAEDState();
+        if (!disableAED && sections.length === 1) {
+          sections[0].classList.add(selectors.activeNavItem.slice(1));
+          setActiveLink(true);
+        }
+      }
+    }
   }
 
   if (config.type === 'footerMenu') {
     await decorateColumns({ content: config.item, separatorTagName: 'H2' });
   }
 
+  // Remove the loading state created in delayDropdownDecoration
+  config.template?.querySelector('.feds-popup.loading')?.remove();
   config.template?.append(menuTemplate);
-}, 'Decorate menu failed', 'errorType=info,module=gnav-menu');
+  if (config.type === 'asyncDropdownTrigger') {
+    setAriaAtributes(menuTemplate.previousElementSibling);
+    performance.mark(`DecorateMenu-${asyncDropDownCount}-End`);
+  }
+}, 'Decorate menu failed', 'gnav-menu', 'i');
 
-export default { decorateMenu, decorateLinkGroup };
+export default { decorateMenu, decorateLinkGroup, decorateHeadline };

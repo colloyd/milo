@@ -3,6 +3,8 @@ import { getConfig, createTag, loadStyle } from '../../utils/utils.js';
 import { getMetadata } from '../section-metadata/section-metadata.js';
 import { processTrackingLabels } from '../../martech/attributes.js';
 import '../../deps/mas/merch-card.js';
+import '../../deps/lit-all.min.js';
+import { initService } from '../merch/merch.js';
 
 const TAG_PATTERN = /^[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-].*$/;
 
@@ -76,6 +78,7 @@ export async function loadMnemonicList(foreground) {
   try {
     const { base } = getConfig();
     const stylePromise = new Promise((resolve) => {
+      /* c8 ignore next */
       loadStyle(`${base}/blocks/mnemonic-list/mnemonic-list.css`, resolve);
     });
     const loadModule = import(`${base}/blocks/mnemonic-list/mnemonic-list.js`)
@@ -86,25 +89,34 @@ export async function loadMnemonicList(foreground) {
   }
 }
 
-function extractQuantitySelect(el) {
-  const quantitySelectConfig = [...el.querySelectorAll('ul')]
-    .find((ul) => ul.querySelector('li')?.innerText?.includes('Quantity'));
-  const configMarkup = quantitySelectConfig?.querySelector('ul');
-  if (!configMarkup) return null;
-  const config = configMarkup.children;
-  if (config.length !== 2) return null;
+function extractQuantitySelect(el, merchCard) {
   const attributes = {};
-  attributes.title = config[0].textContent.trim();
-  const values = config[1].textContent.split(',')
-    .map((value) => value.trim())
-    .filter((value) => /^\d*$/.test(value))
-    .map((value) => (value === '' ? undefined : Number(value)));
-  quantitySelectConfig.remove();
-  if (![3, 4, 5].includes(values.length)) return null;
+  const quantitySelectLink = merchCard?.querySelector('a[href*="#qs"]');
+  if (quantitySelectLink) {
+    const str = quantitySelectLink.getAttribute('href');
+    attributes.title = quantitySelectLink.textContent.trim();
+    const regex = /min=(\d+)&max=(\d+)&step=(\d+)&default=(\d+)&max-input=(\d+)/;
+    [, attributes.min, attributes.max, attributes.step, attributes['default-value'], attributes['max-input']] = str.match(regex);
+    quantitySelectLink.parentElement.remove();
+  } else { // todo: old approach, remove once backwards compatibility is no longer required
+    const quantitySelectConfig = [...el.querySelectorAll('ul')]
+      .find((ul) => ul.querySelector('li')?.innerText?.includes('Quantity'));
+    const configMarkup = quantitySelectConfig?.querySelector('ul');
+    if (configMarkup?.children?.length !== 2) return null;
+    const config = configMarkup.children;
+    attributes.title = config[0].textContent.trim();
+    const values = config[1].textContent.split(',')
+      .map((value) => value.trim())
+      .filter((value) => /^\d*$/.test(value))
+      .map((value) => (value === '' ? undefined : Number(value)));
+    quantitySelectConfig.remove();
+    [attributes.min, attributes.max, attributes.step, attributes['default-value'], attributes['max-input']] = values;
+  }
+  if (!attributes.min || !attributes.max || !attributes.step) {
+    return null;
+  }
   import('../../deps/mas/merch-quantity-select.js');
-  [attributes.min, attributes.max, attributes.step, attributes['default-value'], attributes['max-input']] = values;
-  const quantitySelect = createTag('merch-quantity-select', attributes);
-  return quantitySelect;
+  return createTag('merch-quantity-select', attributes);
 }
 
 const parseTwpContent = async (el, merchCard) => {
@@ -153,9 +165,57 @@ const parseTwpContent = async (el, merchCard) => {
   }
 };
 
+const appendPaymentDetails = (element, merchCard) => {
+  if (element.firstChild?.nodeType !== Node.TEXT_NODE) return;
+  const paymentDetails = createTag('div', { class: 'payment-details' }, element.innerHTML);
+  const headingM = merchCard.querySelector('h4[slot="heading-m"]');
+  headingM?.append(paymentDetails);
+};
+
+const appendCalloutContent = (element, merchCard) => {
+  if (element.firstElementChild?.tagName !== 'EM') return;
+  let calloutSlot = merchCard.querySelector('div[slot="callout-content"]');
+  let calloutContainer = calloutSlot?.querySelector('div');
+  if (!calloutContainer) {
+    calloutSlot = createTag('div', { slot: 'callout-content' });
+    calloutContainer = createTag('div');
+    calloutSlot.appendChild(calloutContainer);
+    merchCard.appendChild(calloutSlot);
+  }
+
+  const calloutContentWrapper = createTag('div');
+  const calloutContent = createTag('div');
+  const emElement = element.firstElementChild;
+  const fragment = document.createDocumentFragment();
+  let imgElement = null;
+
+  emElement.childNodes.forEach((child) => {
+    if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'A' && child.innerText.trim().toLowerCase() === '#icon') {
+      const [imgSrc, tooltipText] = child.getAttribute('href')?.split('#') || [];
+      imgElement = createTag('img', {
+        src: imgSrc,
+        title: decodeURIComponent(tooltipText),
+        class: 'callout-icon',
+      });
+    } else {
+      const clone = child.cloneNode(true);
+      fragment.appendChild(clone);
+    }
+  });
+
+  calloutContent.appendChild(fragment);
+  calloutContentWrapper.appendChild(calloutContent);
+
+  if (imgElement) {
+    calloutContentWrapper.appendChild(imgElement);
+  }
+  calloutContainer.appendChild(calloutContentWrapper);
+};
+
 const parseContent = async (el, merchCard) => {
   let bodySlotName = `body-${merchCard.variant !== MINI_COMPARE_CHART ? 'xs' : 'm'}`;
   let headingMCount = 0;
+  let headingXsCount = 0;
 
   if (merchCard.variant === MINI_COMPARE_CHART) {
     bodySlotName = 'body-m';
@@ -174,14 +234,15 @@ const parseContent = async (el, merchCard) => {
   const innerElements = [
     ...el.querySelectorAll(INNER_ELEMENTS_SELECTOR),
   ];
-  const calloutContainer = createTag('div');
 
   innerElements.forEach((element) => {
+    if (!element.innerHTML.trim()) return;
     let { tagName } = element;
     if (isHeadingTag(tagName)) {
       let slotName = SLOT_MAP[merchCard.variant]?.[tagName] || SLOT_MAP_DEFAULT[tagName];
       if (slotName) {
-        if (['H2', 'H3', 'H4', 'H5'].includes(tagName)) {
+        if (['H2', 'H3', 'H4', 'H5', 'H6'].includes(tagName)) {
+          if (tagName === 'H3') headingXsCount += 1;
           element.classList.add('card-heading');
           if (merchCard.badgeText) {
             element.closest('div[role="tabpanel"')?.classList.add('badge-merch-cards');
@@ -200,6 +261,8 @@ const parseContent = async (el, merchCard) => {
           }
         }
         element.setAttribute('slot', slotName);
+        tagName = (headingXsCount === 1 && tagName === 'H3')
+        || (merchCard.variant === MINI_COMPARE_CHART && slotName === 'heading-m') ? 'h3' : 'p';
         const newElement = createTag(tagName);
         Array.from(element.attributes).forEach((attr) => {
           newElement.setAttribute(attr.name, attr.value);
@@ -209,49 +272,16 @@ const parseContent = async (el, merchCard) => {
       }
       return;
     }
-    if (tagName === 'H6' && element.firstElementChild?.tagName === 'EM') {
-      const calloutContentWrapper = createTag('div');
-      const calloutContent = createTag('div');
-      const emElement = element.firstElementChild;
-      let imgElement = null;
-      const fragment = document.createDocumentFragment();
-
-      emElement.childNodes.forEach((child) => {
-        if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'A' && child.innerText.trim().toLowerCase() === '#icon') {
-          const [imgSrc, tooltipText] = child.getAttribute('href')?.split('#') || [];
-          imgElement = createTag('img', {
-            src: imgSrc,
-            title: decodeURIComponent(tooltipText),
-            class: 'callout-icon',
-          });
-        } else {
-          const clone = child.cloneNode(true);
-          fragment.appendChild(clone);
-        }
-      });
-
-      calloutContent.appendChild(fragment);
-      calloutContentWrapper.appendChild(calloutContent);
-
-      if (imgElement) {
-        calloutContentWrapper.appendChild(imgElement);
-      }
-
-      calloutContainer.appendChild(calloutContentWrapper);
-      return;
+    if (tagName === 'H6') {
+      appendPaymentDetails(element, merchCard);
+      appendCalloutContent(element, merchCard);
     }
     if (isParagraphTag(tagName)) {
       bodySlot.append(element);
-      merchCard.append(bodySlot);
     }
     if (mnemonicList) bodySlot.append(mnemonicList);
   });
-
-  if (calloutContainer.children.length > 0) {
-    const calloutSlot = createTag('div', { slot: 'callout-content' });
-    calloutSlot.appendChild(calloutContainer);
-    merchCard.appendChild(calloutSlot);
-  }
+  merchCard.append(bodySlot);
 
   if (merchCard.variant === MINI_COMPARE_CHART && merchCard.childNodes[1]) {
     merchCard.insertBefore(bodySlot, merchCard.childNodes[1]);
@@ -338,6 +368,44 @@ const addStock = (merchCard, styles) => {
   }
 };
 
+const addAddon = (merchCard, styles) => {
+  const genai = /add-addon-genai/.test(merchCard.className) ? 'genai' : null;
+  const stock = /add-addon-stock/.test(merchCard.className) ? 'stock' : null;
+  const addonType = genai || stock;
+  if (addonType) {
+    let selector = `template.addon.${addonType}.individual`;
+    if (styles.includes('edu')) {
+      selector = `template.addon.${addonType}.edu`;
+    } else if (styles.includes('team')) {
+      selector = `template.addon.${addonType}.team`;
+    }
+    let planType = '';
+    if (styles.includes('m2m')) {
+      planType = 'M2M';
+    } else if (styles.includes('abm')) {
+      planType = 'ABM';
+    } else if (styles.includes('puf')) {
+      planType = 'PUF';
+    }
+
+    if (planType) {
+      merchCard.setAttribute('plan-type', planType);
+    }
+    const template = document.querySelector(selector);
+    if (!template) return;
+    const addon = template.content.cloneNode(true).firstElementChild;
+    addon.setAttribute('slot', 'addon');
+    const gradient = createTag('merch-gradient', {
+      colors: '#F5F6FD, #F8F1F8, #F9E9ED',
+      positions: '33.52%, 67.33%, 110.37%',
+      angle: '211deg',
+      'border-radius': '10px',
+    });
+    addon.appendChild(gradient);
+    merchCard.appendChild(addon);
+  }
+};
+
 const simplifyHrs = (el) => {
   const hrs = el.querySelectorAll('hr');
   hrs.forEach((hr) => {
@@ -345,6 +413,22 @@ const simplifyHrs = (el) => {
       hr.parentElement.replaceWith(hr);
     }
   });
+  if (el.variant === PRODUCT) {
+    const calloutContent = el.querySelector('div[slot="callout-content"]');
+    const bodySlot = el.querySelector('div[slot="body-xs"]');
+    if (calloutContent && bodySlot) {
+      const bodyLowerContent = createTag('div', { slot: 'body-lower' });
+      const elements = [...bodySlot.children];
+      elements.forEach((element) => {
+        if (element.tagName !== 'P') {
+          bodyLowerContent.append(element);
+        }
+      });
+      if (bodyLowerContent.childNodes.length > 0) {
+        calloutContent.parentElement.appendChild(bodyLowerContent);
+      }
+    }
+  }
 };
 
 const getMiniCompareChartFooterRows = (el) => {
@@ -357,23 +441,117 @@ const getMiniCompareChartFooterRows = (el) => {
   return footerRows;
 };
 
-const decorateFooterRows = (merchCard, footerRows) => {
-  if (footerRows) {
-    const footerRowsSlot = createTag('div', { slot: 'footer-rows' });
-    footerRows.forEach((row) => {
-      const rowIcon = row.firstElementChild.querySelector('picture');
-      const rowText = row.querySelector('div > div:nth-child(2)').innerHTML;
-      const rowTextParagraph = createTag('div', { class: 'footer-row-cell-description' }, rowText);
-      const footerRowCell = createTag('div', { class: 'footer-row-cell' });
-      if (rowIcon) {
-        rowIcon.classList.add('footer-row-icon');
-        footerRowCell.appendChild(rowIcon);
-      }
-      footerRowCell.appendChild(rowTextParagraph);
-      footerRowsSlot.appendChild(footerRowCell);
+const createFirstRow = async (firstRow, isMobile, checkmarkCopyContainer, defaultChevronState) => {
+  const firstRowText = firstRow.querySelector('div > div:last-child').innerHTML;
+  let firstRowTextParagraph;
+
+  if (isMobile) {
+    const addIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28" fill="none">
+    <circle cx="14" cy="14" r="12" fill="#F8F8F8"/><path d="M14 26C7.38258 26 2 20.6174 2 14C2 7.38258 7.38258 2 14 2C20.6174 2 26 7.38258 26 14C26 20.6174 20.6174 26 14 26ZM14 4.05714C8.51696 4.05714 4.05714 8.51696 4.05714 14C4.05714 19.483 8.51696 23.9429 14 23.9429C19.483 23.9429 23.9429 19.483 23.9429 14C23.9429 8.51696 19.483 4.05714 14 4.05714Z" fill="#292929"/>
+    <path d="M18.55 12.95H15.05V9.45002C15.05 8.87034 14.5797 8.40002 14 8.40002C13.4203 8.40002 12.95 8.87034 12.95 9.45002V12.95H9.44999C8.87031 12.95 8.39999 13.4203 8.39999 14C8.39999 14.5797 8.87031 15.05 9.44999 15.05H12.95V18.55C12.95 19.1297 13.4203 19.6 14 19.6C14.5797 19.6 15.05 19.1297 15.05 18.55V15.05H18.55C19.1297 15.05 19.6 14.5797 19.6 14C19.6 13.4203 19.1297 12.95 18.55 12.95Z" fill="#292929"/></svg>`;
+    const removeIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28" fill="none">
+    <circle cx="14" cy="14" r="12" fill="#292929"/><path d="M14 26C7.38258 26 2 20.6174 2 14C2 7.38258 7.38258 2 14 2C20.6174 2 26 7.38258 26 14C26 20.6174 20.6174 26 14 26ZM14 4.05714C8.51696 4.05714 4.05714 8.51696 4.05714 14C4.05714 19.483 8.51696 23.9429 14 23.9429C19.483 23.9429 23.9429 19.483 23.9429 14C23.9429 8.51696 19.483 4.05714 14 4.05714Z" fill="#292929"/>
+    <path d="M9 14L19 14" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>`;
+    const toggleIcon = createTag('button', {
+      class: 'toggle-icon',
+      'aria-label': firstRowText,
+      'aria-expanded': defaultChevronState === 'open',
+      'aria-controls': checkmarkCopyContainer.id,
+      'daa-lh': `${checkmarkCopyContainer.id}-toggle-button`,
+    }, defaultChevronState === 'open' ? removeIcon : addIcon);
+    firstRowTextParagraph = createTag('div', { class: 'footer-rows-title' }, firstRowText);
+    firstRowTextParagraph.appendChild(toggleIcon);
+
+    if (defaultChevronState === 'open') {
+      checkmarkCopyContainer.classList.add('open');
+    }
+
+    firstRowTextParagraph.addEventListener('click', () => {
+      const isOpen = checkmarkCopyContainer.classList.toggle('open');
+      toggleIcon.setAttribute('aria-expanded', isOpen);
+      toggleIcon.innerHTML = isOpen ? removeIcon : addIcon;
     });
-    merchCard.appendChild(footerRowsSlot);
+  } else {
+    firstRowTextParagraph = createTag('div', { class: 'footer-rows-title' }, firstRowText);
+    checkmarkCopyContainer.classList.add('open');
   }
+
+  return firstRowTextParagraph;
+};
+
+const createFooterRowCell = (row, isCheckmark) => {
+  const rowIcon = row.firstElementChild.querySelector('picture');
+  const rowText = row.querySelector('div > div:nth-child(2)').innerHTML;
+  const rowTextParagraph = createTag('div', { class: 'footer-row-cell-description' }, rowText);
+  const footerRowCellClass = isCheckmark ? 'footer-row-cell-checkmark' : 'footer-row-cell';
+  const footerRowIconClass = isCheckmark ? 'footer-row-icon-checkmark' : 'footer-row-icon';
+  const footerRowCell = createTag('li', { class: footerRowCellClass });
+
+  if (rowIcon) {
+    rowIcon.querySelector('img')?.removeAttribute('loading');
+    rowIcon.classList.add(footerRowIconClass);
+    footerRowCell.appendChild(rowIcon);
+  }
+  footerRowCell.appendChild(rowTextParagraph);
+
+  return footerRowCell;
+};
+
+const decorateFooterRows = async (merchCard, footerRows) => {
+  if (!footerRows) return;
+
+  const footerRowsSlot = createTag('div', { slot: 'footer-rows' });
+  const isCheckmark = merchCard.classList.contains('bullet-list');
+  const isMobile = window.matchMedia('(max-width: 767px)').matches;
+
+  const ulContainer = createTag('ul');
+  if (isCheckmark) {
+    const firstRow = footerRows[0];
+    const firstRowContent = firstRow.querySelector('div > div:first-child').innerHTML.split(',');
+    let bgStyle = '#E8E8E8';
+    let defaultChevronState = 'close';
+
+    firstRowContent.forEach((item) => {
+      const trimmedItem = item.trim();
+      if (trimmedItem.startsWith('#')) {
+        bgStyle = trimmedItem;
+      } else if (trimmedItem === 'open' || trimmedItem === 'close') {
+        defaultChevronState = trimmedItem;
+      }
+    });
+
+    if (!isMobile) {
+      const hrElem = createTag('hr', { style: `background: ${bgStyle}` });
+      footerRowsSlot.appendChild(hrElem);
+      merchCard.classList.add('has-divider');
+    }
+
+    const merchCardHeading = merchCard.querySelector('h3')?.id;
+    if (merchCardHeading) {
+      ulContainer.setAttribute('id', `${merchCardHeading}-list`);
+    }
+
+    ulContainer.classList.add('checkmark-copy-container');
+    const firstRowTextParagraph = await createFirstRow(
+      firstRow,
+      isMobile,
+      ulContainer,
+      defaultChevronState,
+    );
+
+    footerRowsSlot.appendChild(firstRowTextParagraph);
+
+    footerRows.splice(0, 1);
+    footerRowsSlot.style.padding = 'var(--consonant-merch-card-card-mini-compare-mobile-spacing-xs) var(--consonant-merch-spacing-xs)';
+  }
+  footerRowsSlot.appendChild(ulContainer);
+
+  footerRows.forEach((row) => {
+    const footerRowCell = createFooterRowCell(row, isCheckmark);
+    ulContainer.appendChild(footerRowCell);
+  });
+
+  merchCard.appendChild(footerRowsSlot);
 };
 
 const setMiniCompareOfferSlot = (merchCard, offers) => {
@@ -406,7 +584,7 @@ const addStartingAt = async (styles, merchCard) => {
   if (styles.includes('starting-at')) {
     const { replaceKey } = await import('../../features/placeholders.js');
     await replaceKey('starting-at', getConfig()).then((key) => {
-      const startingAt = createTag('div', { slot: 'starting-at' }, key);
+      const startingAt = createTag('div', { class: 'starting-at' }, key);
       const price = merchCard.querySelector('span[is="inline-price"]');
       if (price) {
         price.parentNode.prepend(startingAt);
@@ -417,6 +595,20 @@ const addStartingAt = async (styles, merchCard) => {
 
 export default async function init(el) {
   if (!el.querySelector(INNER_ELEMENTS_SELECTOR)) return el;
+  const merchServicePromise = initService();
+  // TODO: Remove after bugfix PR adobe/helix-html2md#556 is merged
+  const liELs = el.querySelectorAll('ul li');
+  if (liELs) {
+    [...liELs].forEach((liEl) => {
+      liEl.querySelectorAll('p').forEach((pElement) => {
+        while (pElement?.firstChild) {
+          pElement.parentNode.insertBefore(pElement.firstChild, pElement);
+        }
+        pElement.remove();
+      });
+    });
+  }
+  // TODO: Remove after bugfix PR adobe/helix-html2md#556 is merged
   const styles = [...el.classList];
   const cardType = getPodType(styles) || PRODUCT;
   if (!styles.includes(cardType)) {
@@ -482,7 +674,7 @@ export default async function init(el) {
     }
   }
   let footerRows;
-  if ([MINI_COMPARE_CHART, PLANS, SEGMENT].includes(cardType)) {
+  if ([MINI_COMPARE_CHART, PLANS, SEGMENT, PRODUCT].includes(cardType)) {
     intersectionObserver.observe(merchCard);
   }
   if (cardType === MINI_COMPARE_CHART) {
@@ -508,14 +700,27 @@ export default async function init(el) {
     ? getActionMenuContent(el)
     : null;
   if (actionMenuContent) {
+    const { replaceKey } = await import('../../features/placeholders.js');
+    await replaceKey('action-menu', getConfig()).then((key) => merchCard.setAttribute('action-menu-label', key));
     merchCard.setAttribute('action-menu', true);
     merchCard.append(
       createTag(
         'div',
-        { slot: 'action-menu-content' },
+        { slot: 'action-menu-content', tabindex: '0' },
         actionMenuContent.innerHTML,
       ),
     );
+    merchCard.addEventListener('focusin', () => {
+      const actionMenu = merchCard.shadowRoot.querySelector('.action-menu');
+      actionMenu.classList.add('always-visible');
+    });
+    merchCard.addEventListener('focusout', (e) => {
+      if (!e.target.href || e.target.src || e.target.parentElement.classList.contains('card-heading')) {
+        return;
+      }
+      const actionMenu = merchCard.shadowRoot.querySelector('.action-menu');
+      actionMenu.classList.remove('always-visible');
+    });
   }
   let ctas = el.querySelector('p > strong a, p > em a')?.closest('p');
   if (!ctas) {
@@ -542,10 +747,14 @@ export default async function init(el) {
       const merchIcon = createTag('merch-icon', { slot: 'icons', src: icon.src, alt: icon.alt, href: icon.href, size: 'l' });
       merchCard.appendChild(merchIcon);
     });
-    icons.forEach((icon) => icon.remove());
+    icons.forEach((icon) => {
+      if (icon.parentElement.nodeName === 'A') icon.parentElement.remove();
+      else icon.remove();
+    });
   }
 
   addStock(merchCard, styles);
+  addAddon(merchCard, styles);
   if (styles.includes('secure')) {
     const { replaceKey } = await import('../../features/placeholders.js');
     await replaceKey('secure-transaction', getConfig()).then((key) => merchCard.setAttribute('secure-label', key));
@@ -558,13 +767,21 @@ export default async function init(el) {
 
     const footer = createTag('div', { slot: 'footer' });
     if (ctas) {
-      decorateButtons(ctas, (merchCard.variant === MINI_COMPARE_CHART) ? 'button-l' : undefined);
+      let buttonSize;
+      if (merchCard.variant === MINI_COMPARE_CHART
+        && merchCard.classList.contains('bullet-list')
+        && window.matchMedia('(max-width: 767px)').matches) {
+        buttonSize = 'button-xl';
+      } else if (merchCard.variant === MINI_COMPARE_CHART) {
+        buttonSize = 'button-l';
+      }
+      decorateButtons(ctas, buttonSize);
       footer.append(ctas);
     }
     merchCard.appendChild(footer);
 
     if (MULTI_OFFER_CARDS.includes(cardType)) {
-      const quantitySelect = extractQuantitySelect(el);
+      const quantitySelect = extractQuantitySelect(el, merchCard);
       const offerSelection = el.querySelector('ul');
       if (merchCard.variant === MINI_COMPARE_CHART) {
         const miniCompareOffers = createTag('div', { slot: 'offers' });
@@ -590,10 +807,11 @@ export default async function init(el) {
     decorateBlockHrs(merchCard);
     simplifyHrs(merchCard);
     if (merchCard.classList.contains('has-divider')) merchCard.setAttribute('custom-hr', true);
-    decorateFooterRows(merchCard, footerRows);
+    await decorateFooterRows(merchCard, footerRows);
   } else {
     parseTwpContent(el, merchCard);
   }
+  await merchServicePromise;
   el.replaceWith(merchCard);
   decorateMerchCardLinkAnalytics(merchCard);
   return merchCard;

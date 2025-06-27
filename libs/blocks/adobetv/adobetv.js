@@ -1,41 +1,59 @@
-import { createIntersectionObserver } from '../../utils/utils.js';
-import { applyHoverPlay, getVideoAttrs } from '../../utils/decorate.js';
-
-const ROOT_MARGIN = 1000;
-
-const loadAdobeTv = (a) => {
-  const bgBlocks = ['aside', 'marquee', 'hero-marquee'];
-  if (a.href.includes('.mp4') && bgBlocks.some((b) => a.closest(`.${b}`))) {
-    a.classList.add('hide');
-    const { href, hash, dataset } = a;
-    const attrs = getVideoAttrs(hash || 'autoplay', dataset);
-    const video = `<video ${attrs}>
-          <source src="${href}" type="video/mp4" />
-        </video>`;
-    if (!a.parentNode) return;
-    a.insertAdjacentHTML('afterend', video);
-    const videoElem = document.body.querySelector(`source[src="${href}"]`)?.parentElement;
-    applyHoverPlay(videoElem);
-    a.remove();
-  } else {
-    const embed = `<div class="milo-video">
-      <iframe src="${a.href}" class="adobetv" webkitallowfullscreen mozallowfullscreen allowfullscreen scrolling="no" allow="encrypted-media" title="Adobe Video Publishing Cloud Player" loading="lazy">
-      </iframe>
-    </div>`;
-    a.insertAdjacentHTML('afterend', embed);
-    a.remove();
-  }
-};
+import { decorateAnchorVideo } from '../../utils/decorate.js';
+import { createTag } from '../../utils/utils.js';
 
 export default function init(a) {
   a.classList.add('hide-video');
-  if (a.textContent.includes('no-lazy')) {
-    loadAdobeTv(a);
-  } else {
-    createIntersectionObserver({
-      el: a,
-      options: { rootMargin: `${ROOT_MARGIN}px` },
-      callback: loadAdobeTv,
+  const bgBlocks = ['aside', 'marquee', 'hero-marquee', 'long-form'];
+  if (a.href.includes('.mp4') && bgBlocks.some((b) => a.closest(`.${b}`))) {
+    a.classList.add('hide');
+    if (!a.parentNode) return;
+    decorateAnchorVideo({
+      src: a.href,
+      anchorTag: a,
     });
+  } else {
+    const iframe = createTag('iframe', {
+      src: a.href,
+      class: 'adobetv',
+      scrolling: 'no',
+      allow: 'encrypted-media; fullscreen',
+      title: 'Adobe Video Publishing Cloud Player',
+      loading: 'lazy',
+    });
+    const embed = createTag('div', { class: 'milo-video' }, iframe);
+    a.insertAdjacentElement('afterend', embed);
+
+    const idMatch = a.href.match(/\/v\/(\d+)/);
+    const videoId = idMatch ? idMatch[1] : null;
+
+    if (videoId) {
+      window.fetch(`https://video.tv.adobe.com/v/${videoId}?format=json-ld`)
+        .then((res) => res.json())
+        .then(async (info) => {
+          const { setDialogAndElementAttributes } = await import('../../scripts/accessibility.js');
+          setDialogAndElementAttributes({ element: iframe, title: `${info?.jsonLinkedData?.name}` });
+        });
+    }
+
+    window.addEventListener('message', (event) => {
+      if (event.origin !== 'https://video.tv.adobe.com' || !event.data) return;
+      const { state, id } = event.data;
+      if (!['play', 'pause'].includes(state)
+        || !Number.isInteger(id)
+        || !iframe.src.startsWith(`${event.origin}/v/${id}`)) return;
+
+      iframe.setAttribute('data-playing', state === 'play');
+    });
+
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(({ isIntersecting, target }) => {
+        if (!isIntersecting && target.getAttribute('data-playing') === 'true') {
+          target.contentWindow?.postMessage({ type: 'mpcAction', action: 'pause' }, target.src);
+        }
+      });
+    }, { rootMargin: '0px' });
+    io.observe(iframe);
+
+    a.remove();
   }
 }

@@ -4,6 +4,8 @@ import General from './panels/general.js';
 import SEO from './panels/seo.js';
 import Accessibility from './panels/accessibility.js';
 import Martech from './panels/martech.js';
+import Performance from './panels/performance.js';
+import Assets from './panels/assets.js';
 
 const HEADING = 'Milo Preflight';
 const IMG_PATH = '/blocks/preflight/img';
@@ -13,6 +15,8 @@ const tabs = signal([
   { title: 'SEO' },
   { title: 'Martech' },
   { title: 'Accessibility' },
+  { title: 'Performance' },
+  { title: 'Assets' },
 ]);
 
 function setTab(active) {
@@ -32,6 +36,10 @@ function setPanel(title) {
       return html`<${Martech} />`;
     case 'Accessibility':
       return html`<${Accessibility} />`;
+    case 'Performance':
+      return html`<${Performance} />`;
+    case 'Assets':
+      return html`<${Assets} />`;
     default:
       return html`<p>No matching panel.</p>`;
   }

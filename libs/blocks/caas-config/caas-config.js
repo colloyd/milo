@@ -76,6 +76,7 @@ const defaultOptions = {
     product: 'Product Card',
     'text-card': 'Text Card',
     'icon-card': 'Icon Card',
+    'news-card': 'News Card',
     'custom-card': 'Custom Card',
   },
   collectionBtnStyle: {
@@ -121,7 +122,6 @@ const defaultOptions = {
     custom: 'Custom',
   },
   filterEvent: {
-    '': 'All',
     live: 'Live',
     upcoming: 'Upcoming',
     'on-demand': 'On Demand',
@@ -162,7 +162,7 @@ const defaultOptions = {
   },
   paginationType: {
     paginator: 'Paginator',
-    loadMore: 'Load More',
+    loadMore: 'Load more',
   },
   search: {
     'contentArea.title': 'Card Titles',
@@ -175,8 +175,8 @@ const defaultOptions = {
     featured: 'Featured',
     dateDesc: 'Date: (Newest to Oldest)',
     dateAsc: 'Date: (Oldest to Newest)',
-    modifiedDesc: 'Date: (Last Modified, Newest to Oldest)',
-    modifiedAsc: 'Date (Last Modified, Oldest to Newest)',
+    modifiedDesc: 'Modified Date: (Newest to Oldest)',
+    modifiedAsc: 'Modified Date: (Oldest to Newest)',
     eventSort: 'Events: (Live, Upcoming, OnDemand)',
     titleAsc: 'Title: (A - Z)',
     titleDesc: 'Title: (Z - A)',
@@ -214,10 +214,15 @@ const defaultOptions = {
     default: 'Default',
     createdDate: 'Created Date',
     modifiedDate: 'Modified Date',
+    staticDate: 'Static Date',
   },
   cardHoverEffect: {
     default: 'Default',
     grow: 'Grow',
+  },
+  partialLoadEnabled: {
+    true: 'Enabled',
+    false: 'Disabled',
   },
 };
 
@@ -341,8 +346,11 @@ const BasicsPanel = ({ tagsData }) => {
   }
 
   const countryLangOptions = html`
-    <${Select} options=${countryTags} prop="country" label="Country" sort />
-    <${Select} options=${languageTags} prop="language" label="Language" sort />`;
+  <${Select} options=${countryTags} prop="country" label="Country" sort />
+  <${Select} options=${languageTags} prop="language" label="Language" sort />`;
+
+  const partialLoadOptions = html`
+    <${Input} label="Partial Load Count" prop="partialLoadCount" type="number" />`;
 
   return html`
   <${Input} label="Collection Name" placeholder="Only used in the author link" prop="collectionName" type="text" />
@@ -353,19 +361,21 @@ const BasicsPanel = ({ tagsData }) => {
     <${Input} label="Total Cards to Show" prop="totalCardsToShow" type="number" />
     <${Input} label="Auto detect country & lang" prop="autoCountryLang" type="checkbox" />
     ${!state.autoCountryLang && countryLangOptions}
-
+  <${Input} label="Partial Load Enabled" prop="partialLoadEnabled" options="${defaultOptions.partialLoadEnabled}" type="checkbox"  />
+    ${state.partialLoadEnabled && partialLoadOptions}
   `;
 };
 
 const UiPanel = () => html`
+  <${Input} label="Show Total Count" prop="showTotalResults" type="checkbox" />
   <${Input} label="Show Card Borders" prop="setCardBorders" type="checkbox" />
   <${Input} label="Show Footer Dividers" prop="showFooterDivider" type="checkbox" />
-  <${Input} label="Disable Card Banners" prop="disableBanners" type="checkbox" />
-  <${Input} label="Use Light Text" prop="useLightText" type="checkbox" />
+  <${Input} label="Show Card Badges / BadgeImage" prop="showCardBadges" type="checkbox" />
+  <${Input} label="Show Different CTA for Live Events" prop="dynamicCTAForLiveEvents" type="checkbox" />
+  <${Input} label="Hide Date for On-Demand Content" prop="hideDateInterval" type="checkbox" />
+  <${Input} label="Hide Card Banners" prop="disableBanners" type="checkbox" />
   <${Input} label="Use Overlay Links" prop="useOverlayLinks" type="checkbox" />
-  <${Input} label="Show total card count at top" prop="showTotalResults" type="checkbox" />
-  <${Input} label="Hide date for on-demand content" prop="hideDateInterval" type="checkbox" />
-  <${Input} label="Enable showing card badges (by default hidden)" prop="showCardBadges" type="checkbox" />
+  <${Input} label="Use Light Text" prop="useLightText" type="checkbox" />
   <${Select} label="Card Style" prop="cardStyle" options=${defaultOptions.cardStyle} />
   <${Select} options=${defaultOptions.cardTitleAccessibilityLevel} prop="cardTitleAccessibilityLevel" label="Card Accessibility Title Level" />
   <${Select} label="Layout" prop="container" options=${defaultOptions.container} />
@@ -537,10 +547,10 @@ const SortPanel = () => {
     <div>Sort options to display:</div>
     <div class="sort-options">
       <${Input} label="Featured Sort" prop="sortFeatured" type="checkbox" />
-      <${Input} label="Date: (Oldest to Newest)" prop="sortDateAsc" type="checkbox" />
       <${Input} label="Date: (Newest to Oldest)" prop="sortDateDesc" type="checkbox" />
-      <${Input} label="Date (Last Modified, Oldest to Newest)" prop="sortModifiedAsc" type="checkbox" />
-      <${Input} label="Date: (Last Modified, Newest to Oldest)" prop="sortModifiedDesc" type="checkbox" />
+      <${Input} label="Date: (Oldest to Newest)" prop="sortDateAsc" type="checkbox" />
+      <${Input} label="Modified Date: (Oldest to Newest)" prop="sortModifiedAsc" type="checkbox" />
+      <${Input} label="Modified Date: (Newest to Oldest)" prop="sortModifiedDesc" type="checkbox" />
       <${Input} label="Events" prop="sortEventSort" type="checkbox" />
       <${Input} label="Title A-Z" prop="sortTitleAsc" type="checkbox" />
       <${Input} label="Title Z-A" prop="sortTitleDesc" type="checkbox" />
@@ -576,7 +586,6 @@ const FilterPanel = ({ tagsData }) => {
     <${Input} label="Show Empty Filters" prop="filtersShowEmpty" type="checkbox" />
     <${Select} label="Filter Location" prop="filterLocation" options=${defaultOptions.filterLocation} />
     <${Select} label="Filter logic within each tag panel" prop="filterLogic" options=${defaultOptions.filterLogic} />
-    <${Select} label="Event Filter" prop="filterEvent" options=${defaultOptions.filterEvent} />
     <${Select} label="Automatic or Custom Panel" prop="filterBuildPanel" options=${defaultOptions.filterBuildPanel} />
   `;
 
@@ -633,6 +642,7 @@ const FilterPanel = ({ tagsData }) => {
       && (state.filterBuildPanel === 'custom'
         ? FilterCustomBuildPanel
         : FilterBuildPanel)}
+    <${DropdownSelect} id="filterEvent" options=${defaultOptions.filterEvent} prop="filterEvent" label="Event Filters" />
   `;
 };
 
@@ -648,6 +658,7 @@ const SearchPanel = () => html`
 const PaginationPanel = () => {
   const { state } = useContext(ConfiguratorContext);
   const paginationOptions = html`
+    <${Input} label="Show Pagination Quantity" prop="paginationQuantityShown" type="checkbox" />
     <${Select}
       label="Load More Button Style"
       prop="loadMoreBtnStyle"
@@ -659,7 +670,7 @@ const PaginationPanel = () => {
       options=${defaultOptions.paginationType}
     />
     <${Select}
-      label="Animation Style"
+      label="Carousel Animation Style"
       prop="paginationAnimationStyle"
       options=${defaultOptions.paginationAnimationStyle}
     />
@@ -668,7 +679,6 @@ const PaginationPanel = () => {
 
   return html`
     <${Input} label="Enable Pagination" prop="paginationEnabled" type="checkbox" />
-    <${Input} label="Show Pagination Quantity" prop="paginationQuantityShown" type="checkbox" />
     ${state.paginationEnabled && paginationOptions}
   `;
 };
@@ -826,10 +836,21 @@ const CopyBtn = () => {
     }, 2000);
   };
 
+  const removeDefaultsFromState = (fullState) => {
+    const reducedState = {};
+    Object.keys(fullState).forEach((key) => {
+      if (JSON.stringify(fullState[key]) !== JSON.stringify(defaultState[key])) {
+        reducedState[key] = fullState[key];
+      }
+    });
+    return reducedState;
+  };
+
   const getUrl = async () => {
     const url = new URL(window.location.href);
     url.search = '';
-    const hashStr = await getEncodedObject(state, fgKeyReplacer);
+    const reducedState = removeDefaultsFromState(state);
+    const hashStr = await getEncodedObject(reducedState, fgKeyReplacer);
     // starts with ~~ to differentiate from old hash format
     url.hash = `~~${hashStr}`;
     return url.href;
@@ -855,7 +876,7 @@ const CopyBtn = () => {
       hour12: false,
     });
     const collectionName = state.collectionName ? `- ${state.collectionName} ` : '';
-    link.textContent = `Content as a Service v2 ${collectionName}- ${dateStr}${state.doNotLazyLoad ? ' (no-lazy)' : ''}`;
+    link.textContent = `Content as a Service v3 ${collectionName}- ${dateStr}${state.doNotLazyLoad ? ' (no-lazy)' : ''}`;
 
     const blob = new Blob([link.outerHTML], { type: 'text/html' });
     const data = [new ClipboardItem({ [blob.type]: blob })];
@@ -946,12 +967,14 @@ const getPanels = (tagsData) => [
 ];
 
 /* c8 ignore next 15 */
-const addIdOverlays = () => {
+export const addIdOverlays = () => {
   document.querySelectorAll('.consonant-Card').forEach((card) => {
     if (!card.querySelector('.cardid')) {
       const idBtn = document.createElement('button');
       idBtn.classList.add('cardid');
       idBtn.innerText = card.id;
+
+      idBtn.title = 'Click to copy this ID';
 
       idBtn.addEventListener('click', (e) => {
         const id = e.target.textContent;

@@ -2,6 +2,7 @@
 .appPrompt {
   --pep-background-prompt: #ffffff;
   --pep-background-progress: #e9e9e9;
+  --pep-dismiss-button-focus-border-color: #3b63fb;
   display: none;
 }
 
@@ -159,10 +160,7 @@
   }
 
   .appPrompt-close:focus {
-    /* For Firefox */
-    outline: auto;
-    /* For Chrome, Edge, and Safari */
-    outline: 2px solid -webkit-focus-ring-color;
+    outline: 2px solid var(--pep-dismiss-button-focus-border-color);
   }
 
   .appPrompt-progressWrapper {
@@ -184,6 +182,10 @@
 
   [dir = "rtl"] .appPrompt-progress {
     transform-origin: top right;
+  }
+
+  .appPrompt:hover .appPrompt-progressPauseOnHover {
+    animation-play-state: paused;
   }
 
   @keyframes appPrompt-animate {

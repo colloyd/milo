@@ -2,13 +2,17 @@ const {
   slackNotification,
   getLocalConfigs,
   isWithinRCP,
+  isWithinPrePostRCP,
   pulls: { addLabels, addFiles, getChecks, getReviews },
+  ZERO_IMPACT_PREFIX
 } = require('./helpers.js');
 
 // Run from the root of the project for local testing: node --env-file=.env .github/workflows/merge-to-stage.js
 const PR_TITLE = '[Release] Stage to Main';
-const SEEN = {};
-const REQUIRED_APPROVALS = process.env.REQUIRED_APPROVALS || 2;
+const REQUIRED_APPROVALS = process.env.REQUIRED_APPROVALS ? Number(process.env.REQUIRED_APPROVALS) : 2;
+const BASE_MAX_MERGES = process.env.MAX_PRS_PER_BATCH ? Number(process.env.MAX_PRS_PER_BATCH) : 9;
+const MAX_MERGES = BASE_MAX_MERGES + (isWithinPrePostRCP() ? 3 : 0);
+let existingPRCount = 0;
 const STAGE = 'stage';
 const PROD = 'main';
 const LABELS = {
@@ -18,20 +22,21 @@ const LABELS = {
   zeroImpact: 'zero-impact',
 };
 const TEAM_MENTIONS = [
-  '@adobecom/miq-sot',
   '@adobecom/bacom-sot',
-  '@adobecom/homepage-sot',
   '@adobecom/creative-cloud-sot',
   '@adobecom/document-cloud-sot',
+  '@adobecom/express-sot',
+  '@adobecom/homepage-sot',
+  '@adobecom/miq-sot',
+  '@adobecom/blog-sot',
 ];
 const SLACK = {
-  merge: ({ html_url, number, title, prefix = '' }) =>
-    `:merged: PR merged to stage: ${prefix} <${html_url}|${number}: ${title}>.`,
-  openedSyncPr: ({ html_url, number }) =>
-    `:fast_forward: Created <${html_url}|Stage to Main PR ${number}>`,
+  openedSyncPr: ({ html_url, number }) => `:fast_forward: Created <${html_url}|Stage to Main PR ${number}>`,
 };
 
-let github, owner, repo;
+let github;
+let owner;
+let repo;
 
 let body = `
 ## common base root URLs
@@ -42,8 +47,8 @@ let body = `
 **Acrobat:** https://www.stage.adobe.com/acrobat/online/sign-pdf.html
 
 **Milo:**
-- Before: https://main--milo--adobecom.hlx.live/?martech=off
-- After: https://stage--milo--adobecom.hlx.live/?martech=off
+- Before: https://main--milo--adobecom.aem.live/?martech=off
+- After: https://stage--milo--adobecom.aem.live/?martech=off
 `;
 
 const isHighPrio = (labels) => labels.includes(LABELS.highPriority);
@@ -52,7 +57,8 @@ const isZeroImpact = (labels) => labels.includes(LABELS.zeroImpact);
 const hasFailingChecks = (checks) =>
   checks.some(
     ({ conclusion, name }) =>
-      name !== 'merge-to-stage' && conclusion === 'failure'
+      name !== 'merge-to-stage' &&
+      (conclusion === 'in_progress' || conclusion === 'failure')
   );
 
 const commentOnPR = async (comment, prNumber) => {
@@ -91,10 +97,7 @@ const getPRs = async () => {
 
   prs = prs.filter(({ checks, reviews, number, title }) => {
     if (hasFailingChecks(checks)) {
-      commentOnPR(
-        `Skipped merging ${number}: ${title} due to failing checks`,
-        number
-      );
+      commentOnPR(`Skipped merging ${number}: ${title} due to failing or running checks`, number);
       return false;
     }
 
@@ -102,7 +105,7 @@ const getPRs = async () => {
     if (approvals.length < REQUIRED_APPROVALS) {
       commentOnPR(
         `Skipped merging ${number}: ${title} due to insufficient approvals. Required: ${REQUIRED_APPROVALS} approvals`,
-        number
+        number,
       );
       return false;
     }
@@ -121,7 +124,7 @@ const getPRs = async () => {
       }
       return categorizedPRs;
     },
-    { zeroImpactPRs: [], highImpactPRs: [], normalPRs: [] }
+    { zeroImpactPRs: [], highImpactPRs: [], normalPRs: [] },
   );
 };
 
@@ -130,18 +133,7 @@ const merge = async ({ prs, type }) => {
 
   for await (const { number, files, html_url, title } of prs) {
     try {
-      const fileOverlap = files.find((file) => SEEN[file]);
-      if (fileOverlap) {
-        commentOnPR(
-          `Skipped ${number}: "${title}" due to file "${fileOverlap}" overlap. Merging will be attempted in the next batch`,
-          number
-        );
-        continue;
-      }
-      if (type !== LABELS.zeroImpact) {
-        files.forEach((file) => (SEEN[file] = true));
-      }
-
+      if (mergeLimitExceeded()) return;
       if (!process.env.LOCAL_RUN) {
         await github.rest.pulls.merge({
           owner,
@@ -150,34 +142,24 @@ const merge = async ({ prs, type }) => {
           merge_method: 'squash',
         });
       }
-      const prefix = type === LABELS.zeroImpact ? ' [ZERO IMPACT]' : '';
+      if (type !== LABELS.zeroImpact) {
+        existingPRCount++;
+      }
+      console.log(`Current number of PRs merged: ${existingPRCount} (exluding Zero Impact)`);
+      const prefix = type === LABELS.zeroImpact ? ` ${ZERO_IMPACT_PREFIX}` : '';
       body = `-${prefix} ${html_url}\n${body}`;
-      await slackNotification(
-        SLACK.merge({
-          html_url,
-          number,
-          title,
-          prefix,
-        })
-      ).catch(console.error);
       await new Promise((resolve) => setTimeout(resolve, 5000));
     } catch (error) {
-      files.forEach((file) => (SEEN[file] = false));
-      commentOnPR(`Error merging ${number}: ${title} ` + error.message, number);
+      commentOnPR(`Error merging ${number}: ${title} ${error.message}`, number);
     }
   }
 };
 
-const getStageToMainPR = () =>
-  github.rest.pulls
-    .list({ owner, repo, state: 'open', base: PROD })
-    .then(({ data } = {}) => data.find(({ title } = {}) => title === PR_TITLE))
-    .then((pr) => pr && addLabels({ pr, github, owner, repo }))
-    .then((pr) => pr && addFiles({ pr, github, owner, repo }))
-    .then((pr) => {
-      pr?.files.forEach((file) => (SEEN[file] = true));
-      return pr;
-    });
+const getStageToMainPR = () => github.rest.pulls
+  .list({ owner, repo, state: 'open', base: PROD })
+  .then(({ data } = {}) => data.find(({ title } = {}) => title === PR_TITLE))
+  .then((pr) => pr && addLabels({ pr, github, owner, repo }))
+  .then((pr) => pr && addFiles({ pr, github, owner, repo }));
 
 const openStageToMainPR = async () => {
   const { data: comparisonData } = await github.rest.repos.compareCommits({
@@ -188,12 +170,11 @@ const openStageToMainPR = async () => {
   });
 
   for (const commit of comparisonData.commits) {
-    const { data: pullRequestData } =
-      await github.rest.repos.listPullRequestsAssociatedWithCommit({
-        owner,
-        repo,
-        commit_sha: commit.sha,
-      });
+    const { data: pullRequestData } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+      owner,
+      repo,
+      commit_sha: commit.sha,
+    });
 
     for (const pr of pullRequestData) {
       if (!body.includes(pr.html_url)) body = `- ${pr.html_url}\n${body}`;
@@ -201,9 +182,7 @@ const openStageToMainPR = async () => {
   }
 
   try {
-    const {
-      data: { html_url, number },
-    } = await github.rest.pulls.create({
+    const { data: { html_url, number } } = await github.rest.pulls.create({
       owner,
       repo,
       title: PR_TITLE,
@@ -222,41 +201,39 @@ const openStageToMainPR = async () => {
     await slackNotification(SLACK.openedSyncPr({ html_url, number }));
     await slackNotification(
       SLACK.openedSyncPr({ html_url, number }),
-      process.env.MILO_STAGE_SLACK_WH
+      process.env.MILO_STAGE_SLACK_WH,
     );
   } catch (error) {
-    if (error.message.includes('No commits between main and stage'))
-      return console.log('No new commits, no stage->main PR opened');
+    if (error.message.includes('No commits between main and stage')) return console.log('No new commits, no stage->main PR opened');
     throw error;
   }
 };
+
+const mergeLimitExceeded = () => MAX_MERGES - existingPRCount < 0;
 
 const main = async (params) => {
   github = params.github;
   owner = params.context.repo.owner;
   repo = params.context.repo.repo;
-  if (isWithinRCP(2)) return console.log('Stopped, within RCP period.');
-
+  if (isWithinRCP({ offset: process.env.STAGE_RCP_OFFSET_DAYS || 2, excludeShortRCP: true })) return console.log('Stopped, within RCP period.');
   try {
     const stageToMainPR = await getStageToMainPR();
     console.log('has Stage to Main PR:', !!stageToMainPR);
+
     if (stageToMainPR) body = stageToMainPR.body;
+
+    existingPRCount = body.match(new RegExp(`(?:\\${ZERO_IMPACT_PREFIX}\\s*)?https:\\/\\/github\\.com\\/adobecom\\/milo\\/pull\\/\\d+`, 'g'))
+      ?.filter(match => !match.includes(ZERO_IMPACT_PREFIX)).length || 0
+    console.log(`Number of PRs already in the batch: ${existingPRCount} (excluding Zero Impact)`);
+
     const { zeroImpactPRs, highImpactPRs, normalPRs } = await getPRs();
     await merge({ prs: zeroImpactPRs, type: LABELS.zeroImpact });
-    if (stageToMainPR?.labels.some((label) => label.includes(LABELS.SOTPrefix)))
-      return console.log('PR exists & testing started. Stopping execution.');
+
+    if (mergeLimitExceeded()) return console.log('Maximum number of PRs already merged. Stopping execution');
+    if (stageToMainPR?.labels.some((label) => label.includes(LABELS.SOTPrefix))) return console.log('PR exists & testing started. Stopping execution.');
     await merge({ prs: highImpactPRs, type: LABELS.highPriority });
     await merge({ prs: normalPRs, type: 'normal' });
     if (!stageToMainPR) await openStageToMainPR();
-    if (stageToMainPR && body !== stageToMainPR.body) {
-      console.log("Updating PR's body...");
-      await github.rest.pulls.update({
-        owner,
-        repo,
-        pull_number: stageToMainPR.number,
-        body: body,
-      });
-    }
     console.log('Process successfully executed.');
   } catch (error) {
     console.error(error);

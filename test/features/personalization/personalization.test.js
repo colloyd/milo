@@ -3,11 +3,11 @@ import { readFile } from '@web/test-runner-commands';
 import { assert, stub } from 'sinon';
 import { getConfig, setConfig } from '../../../libs/utils/utils.js';
 import {
-  handleFragmentCommand, applyPers,
-  init, matchGlob, createFrag, combineMepSources, buildVariantInfo,
+  handleFragmentCommand, applyPers, cleanAndSortManifestList, normalizePath,
+  init, matchGlob, createContent, combineMepSources, buildVariantInfo, addSectionAnchors,
 } from '../../../libs/features/personalization/personalization.js';
-import spoofParams from './spoofParams.js';
 import mepSettings from './mepSettings.js';
+import mepSettingsPreview from './mepPreviewSettings.js';
 
 document.head.innerHTML = await readFile({ path: './mocks/metadata.html' });
 document.body.innerHTML = await readFile({ path: './mocks/personalization.html' });
@@ -35,6 +35,7 @@ describe('Functional Test', () => {
     // Add custom keys so tests doesn't rely on real data
     const config = getConfig();
     config.env = { name: 'prod' };
+    config.locale = { ietf: 'en-US', prefix: '' };
     config.consumerEntitlements = {
       '11111111-aaaa-bbbb-6666-cccccccccccc': 'my-special-app',
       '22222222-xxxx-bbbb-7777-cccccccccccc': 'fireflies',
@@ -54,37 +55,46 @@ describe('Functional Test', () => {
   });
 
   it('Can select elements using block-#', async () => {
+    document.body.innerHTML = await readFile({ path: './mocks/personalization.html' });
     await loadManifestAndSetResponse('./mocks/manifestBlockNumber.json');
 
-    expect(document.querySelector('.marquee')).to.not.be.null;
+    const firstMarquee = document.getElementsByClassName('marquee')[0];
+    const secondMarquee = document.getElementsByClassName('marquee')[1];
+    expect(firstMarquee).to.not.be.null;
+    expect(secondMarquee).to.not.be.null;
     expect(document.querySelector('a[href="/fragments/replace/marquee/r2c1"]')).to.be.null;
     expect(document.querySelector('a[href="/fragments/replace/marquee-2/r3c2"]')).to.be.null;
-    const secondMarquee = document.getElementsByClassName('marquee')[1];
-    expect(secondMarquee).to.not.be.null;
 
     await init(mepSettings);
 
     const fragment = document.querySelector('a[href="/fragments/replace/marquee/r2c1"]');
-    expect(fragment).to.not.be.null;
-    const replacedCell = document.querySelector('.marquee > div:nth-child(2) > div:nth-child(1)');
-    expect(replacedCell.firstChild.firstChild).to.equal(fragment);
     const secondFrag = document.querySelector('a[href="/fragments/replace/marquee-2/r2c2"]');
-    expect(secondMarquee.lastElementChild.lastElementChild.firstChild.firstChild)
-      .to.equal(secondFrag);
+    expect(fragment).to.not.be.null;
+    expect(secondFrag).to.not.be.null;
+
+    const firstMarqueeReplacedCell = firstMarquee.querySelector('p > a');
+    const secondMarqueeReplacedCell = secondMarquee.querySelector('p > a');
+    expect(firstMarqueeReplacedCell.href).to.equal(fragment.href);
+    expect(secondMarqueeReplacedCell.href).to.equal(secondFrag.href);
   });
 
   it('Can select blocks using section and block indexs', async () => {
     await loadManifestAndSetResponse('./mocks/manifestSectionBlock.json');
 
-    expect(document.querySelector('.special-block')).to.not.be.null;
+    expect(document.querySelector('.custom-block-1')).to.not.be.null;
     expect(document.querySelector('.custom-block-2')).to.not.be.null;
-    expect(document.querySelector('.custom-block-3')).to.not.be.null;
 
     await init(mepSettings);
 
-    expect(document.querySelector('.special-block')).to.be.null;
+    expect(document.querySelector('.custom-block-1')).to.be.null;
     expect(document.querySelector('.custom-block-2')).to.be.null;
-    expect(document.querySelector('.custom-block-3')).to.be.null;
+  });
+
+  it('should not normalize absolute path to a script file, if the file is hosted in DAM', async () => {
+    const DAMpath = 'https://www.adobe.com/content/dam/cc/optimization/mwpw-168109/test.js';
+    const nonDAMpath = 'https://www.adobe.com/foo/test.js';
+    expect(normalizePath(DAMpath)).to.include('https://www.adobe.com');
+    expect(normalizePath(nonDAMpath)).to.not.include('https://www.adobe.com');
   });
 
   it('scheduled manifest should apply changes if active (bts)', async () => {
@@ -108,7 +118,7 @@ describe('Functional Test', () => {
     manifestJson = JSON.parse(manifestJson);
     setFetchResponse(manifestJson);
     expect(document.querySelector('a[href="/test/features/personalization/mocks/fragments/insertafter3"]')).to.be.null;
-    await applyPers(promoMepSettings);
+    await applyPers({ manifests: promoMepSettings });
 
     const fragment = document.querySelector('a[href="/test/features/personalization/mocks/fragments/insertafter3"]');
     expect(fragment).to.not.be.null;
@@ -135,7 +145,7 @@ describe('Functional Test', () => {
     ];
     await loadManifestAndSetResponse('./mocks/manifestScheduledInactive.json');
     expect(document.querySelector('a[href="/fragments/insertafter4"]')).to.be.null;
-    await applyPers(promoMepSettings);
+    await applyPers({ manifests: promoMepSettings });
 
     const fragment = document.querySelector('a[href="/fragments/insertafter4"]');
     expect(fragment).to.be.null;
@@ -150,11 +160,11 @@ describe('Functional Test', () => {
     expect(config.mep?.martech).to.be.undefined;
   });
 
-  it('should choose chrome & logged out', async () => {
+  it('should choose chrome & logged out (using nickname)', async () => {
     await loadManifestAndSetResponse('./mocks/manifestWithAmpersand.json');
     await init(mepSettings);
     const config = getConfig();
-    expect(config.mep?.martech).to.equal('|chrome & logged|ampersand');
+    expect(config.mep?.martech).to.equal('|my nickname|ampersand');
   });
 
   it('should choose not firefox', async () => {
@@ -162,6 +172,52 @@ describe('Functional Test', () => {
     await init(mepSettings);
     const config = getConfig();
     expect(config.mep?.martech).to.equal('|not firefox|not');
+  });
+
+  it('should not error when nickname has multiple colons', async () => {
+    await loadManifestAndSetResponse('./mocks/manifestWithNicknames.json');
+    const tempMepSettings = {
+      mepParam: '/path/to/manifest.json--pzn2: param-nickname=double:',
+      mepHighlight: false,
+      mepButton: false,
+      pzn: '/path/to/manifest.json',
+      promo: false,
+      target: false,
+    };
+    await init(tempMepSettings);
+    const config = getConfig();
+    console.log('test: ', config);
+    expect(config.mep?.martech).to.equal('|pzn2|manifest');
+  });
+
+  it('should not error when name nickname is empty', async () => {
+    await loadManifestAndSetResponse('./mocks/manifestWithNicknames.json');
+    const tempMepSettings = {
+      mepParam: '/path/to/manifest.json--:param-nickname=start',
+      mepHighlight: false,
+      mepButton: false,
+      pzn: '/path/to/manifest.json',
+      promo: false,
+      target: false,
+    };
+    await init(tempMepSettings);
+    const config = getConfig();
+    expect(config.mep?.martech).to.equal('|:param-nickname|manifest');
+  });
+
+  it('should show nickname instead of original audience when using nicknames syntax', async () => {
+    await loadManifestAndSetResponse('./mocks/manifestWithNicknames.json');
+    const tempMepSettings = {
+      mepParam: '/path/to/manifest.json--pzn2: param-nickname=true',
+      mepHighlight: false,
+      mepButton: false,
+      pzn: '/path/to/manifest.json',
+      promo: false,
+      target: false,
+    };
+    await init(tempMepSettings);
+    const config = getConfig();
+    expect(config.mep?.martech).to.equal('|pzn2|manifest');
   });
 
   it('should read and use entitlement data', async () => {
@@ -278,14 +334,27 @@ describe('Functional Test', () => {
     });
   });
 
-  it('invalid selector should output error to console', async () => {
+  it('invalid selector should output error to console in preview mode', async () => {
     window.console.log = stub();
-
     await loadManifestAndSetResponse('./mocks/manifestInvalidSelector.json');
+    await init(mepSettingsPreview);
+    assert.calledWith(window.console.log, 'Invalid selector: ');
+    window.console.log.reset();
+  });
 
+  it('invalid selector should not output error to console if not in preview mode', async () => {
+    window.console.log = stub();
+    await loadManifestAndSetResponse('./mocks/manifestInvalidSelector.json');
     await init(mepSettings);
+    assert.neverCalledWith(window.console.log, 'Invalid selector: ');
+    window.console.log.reset();
+  });
 
-    assert.calledWith(window.console.log, 'Invalid selector: ', '.bad...selector');
+  it('missing selector should output error to console if in preview mode', async () => {
+    window.console.log = stub();
+    await loadManifestAndSetResponse('./mocks/manifestEmptyAction.json');
+    await init(mepSettingsPreview);
+    assert.calledWith(window.console.log, 'Row found with empty action field: ');
     window.console.log.reset();
   });
 
@@ -309,36 +378,10 @@ describe('Functional Test', () => {
     expect(document.querySelector('meta[property="og:image"]').content).to.equal('https://adobe.com/path/to/image.jpg');
   });
 
-  it('should override to param-newoffer=123', async () => {
-    spoofParams({ newoffer: '123' });
-    const config = getConfig();
-    await loadManifestAndSetResponse('./mocks/actions/manifestAppendToSection.json');
-    setTimeout(async () => {
-      await init(mepSettings);
-      expect(config.mep.experiments[0].selectedVariantName).to.equal('param-newoffer=123');
-    }, 100);
-  });
-});
-
-describe('matchGlob function', () => {
-  it('should match page', async () => {
-    const result = matchGlob('/products/special-offers', '/products/special-offers');
-    expect(result).to.be.true;
-  });
-
-  it('should match page with HTML extension', async () => {
-    const result = matchGlob('/products/special-offers', '/products/special-offers.html');
-    expect(result).to.be.true;
-  });
-
-  it('should not match child page', async () => {
-    const result = matchGlob('/products/special-offers', '/products/special-offers/free-download');
-    expect(result).to.be.false;
-  });
-
-  it('should match child page', async () => {
-    const result = matchGlob('/products/special-offers**', '/products/special-offers/free-download');
-    expect(result).to.be.true;
+  it('will add id to the section div', async () => {
+    addSectionAnchors(document);
+    const sectionWithId = document.querySelector('#marquee-container');
+    expect(sectionWithId).to.exist;
   });
 });
 
@@ -367,7 +410,16 @@ describe('matchGlob function', () => {
     const parent = document.createElement('div');
     const el = document.createElement('div');
     parent.appendChild(el);
-    const wrapper = createFrag(el, '/fragments/promos/path-to-promo/#modal-hash:delay=1');
+    const wrapper = createContent(
+      el,
+      {
+        content: '/fragments/promos/path-to-promo/#modal-hash:delay=1',
+        manifestId: 'manifest',
+        targetManifestId: '',
+        action: 'insertAfter',
+        modifiers: [],
+      },
+    );
     expect(wrapper.tagName).to.equal('P');
     expect(wrapper.classList.contains('hide-block')).to.be.true;
   });
@@ -376,13 +428,13 @@ describe('matchGlob function', () => {
 describe('MEP Utils', () => {
   describe('combineMepSources', async () => {
     it('yields an empty list when everything is undefined', async () => {
-      const manifests = await combineMepSources(undefined, undefined, undefined);
+      const manifests = await combineMepSources(undefined, undefined, undefined, undefined);
       expect(manifests.length).to.equal(0);
     });
     it('combines promos and personalization', async () => {
       document.head.innerHTML = await readFile({ path: '../../utils/mocks/mep/head-promo.html' });
       const promos = { manifestnames: 'pre-black-friday-global,black-friday-global' };
-      const manifests = await combineMepSources('/pers/manifest.json', promos, undefined);
+      const manifests = await combineMepSources('/pers/manifest.json', undefined, promos, undefined);
       expect(manifests.length).to.equal(3);
       expect(manifests[0].manifestPath).to.equal('/pers/manifest.json');
       expect(manifests[1].manifestPath).to.equal('/pre-black-friday.json');
@@ -393,6 +445,7 @@ describe('MEP Utils', () => {
       const promos = { manifestnames: 'pre-black-friday-global,black-friday-global' };
       const manifests = await combineMepSources(
         '/pers/manifest.json',
+        undefined,
         promos,
         '/pers/manifest.json--var1---/mep-param/manifest1.json--all---/mep-param/manifest2.json--all',
       );
@@ -402,6 +455,30 @@ describe('MEP Utils', () => {
       expect(manifests[2].manifestPath).to.equal('/black-friday.json');
       expect(manifests[3].manifestPath).to.equal('/mep-param/manifest1.json');
       expect(manifests[4].manifestPath).to.equal('/mep-param/manifest2.json');
+    });
+  });
+  describe('cleanAndSortManifestList', async () => {
+    it('chooses server manifest over target manifest if same manifest path', async () => {
+      const config = { env: { name: 'stage' } };
+      let manifests = await readFile({ path: './mocks/manifestLists/two-manifests-one-from-target.json' });
+      manifests = JSON.parse(manifests);
+      manifests[0].manifestPath = 'same path';
+      manifests[1].manifestPath = 'same path';
+      const response = cleanAndSortManifestList(manifests, config);
+      const result = response.find((manifest) => manifest.source.length > 1);
+      expect(result).to.be.not.null;
+      expect(result.selectedVariant.commands[0].action).to.equal('appendtosection');
+    });
+    it('chooses target manifest over server manifest if same manifest path and in production and selected audience is "target-*"', async () => {
+      const config = { env: { name: 'prod' } };
+      let manifests = await readFile({ path: './mocks/manifestLists/two-manifests-one-from-target.json' });
+      manifests = JSON.parse(manifests);
+      manifests[0].manifestPath = 'same path';
+      manifests[1].manifestPath = 'same path';
+      const response = cleanAndSortManifestList(manifests, config);
+      const result = response.find((manifest) => manifest.source.length > 1);
+      expect(result).to.be.not.null;
+      expect(result.selectedVariant.commands[0].action).to.equal('append');
     });
   });
 });

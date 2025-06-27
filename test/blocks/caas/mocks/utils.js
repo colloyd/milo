@@ -12,6 +12,8 @@ export const utf8ToB64 = (str) => window.btoa(unescape(encodeURIComponent(str)))
 
 export const b64ToUtf8 = (str) => decodeURIComponent(escape(window.atob(str)));
 
+export const customFetch = stub();
+
 export function getMetadata(name, doc = document) {
   const attr = name && name.includes(':') ? 'property' : 'name';
   const meta = doc.head.querySelector(`meta[${attr}="${name}"]`);
@@ -22,6 +24,9 @@ export function createIntersectionObserver({ el, callback /* , once = true, opti
   // fire immediately
   callback(el, { target: el });
 }
+
+const PAGE_URL = new URL(window.location.href);
+export const SLD = PAGE_URL.hostname.includes('.aem.') ? 'aem' : 'hlx';
 
 export const parseEncodedConfig = stub().returns({
   analyticsTrackImpression: false,

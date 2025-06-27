@@ -16,11 +16,12 @@ async function loadFragments(el, experiences) {
   }
   document.querySelectorAll('main > div, .quiz-results').forEach((quiz) => quiz.removeAttribute('daa-lh'));
   document.querySelectorAll('.quiz-results.basic > .fragment > .section').forEach((section, idx) => decorateSectionAnalytics(section, idx, getConfig()));
+  if (el.getAttribute('role') === 'list') document.querySelectorAll('.nested[role=list] > .fragment').forEach((fragment) => fragment.setAttribute('role', 'listitem'));
 }
 
 function redirectPage(quizUrl, debug, message) {
   const url = quizUrl ? getLocalizedURL(quizUrl.text) : 'https://adobe.com';
-  window.lana.log(message, { tags: 'errorType=error,module=quiz-results' });
+  window.lana.log(message, { tags: 'quiz-results' });
 
   if (debug === 'quiz-results') {
     // eslint-disable-next-line no-console
@@ -97,7 +98,7 @@ export default async function init(el, debug = null, localStoreKey = null) {
 
     loadFragments(el, basic);
   } else {
-    window.lana.log(`${LOADING_ERROR} The quiz-results block is misconfigured`, { tags: 'errorType=error,module=quiz-results' });
+    window.lana.log(`${LOADING_ERROR} The quiz-results block is misconfigured`, { tags: 'quiz-results' });
     return;
   }
 

@@ -30,7 +30,7 @@
     import { runTests } from '@web/test-runner-mocha';
     import { expect } from '@esm-bundle/chai';
     import { stub } from 'sinon';
-    import { default as init, cloneObj, updateObj, getHashConfig } from '../../../libs/blocks/caas-config/caas-config.js';
+    import { default as init, cloneObj, updateObj, getHashConfig, addIdOverlays } from '../../../libs/blocks/caas-config/caas-config.js';
     import {
       findByLabel,
       tagSelectorDropdownChoose,
@@ -286,7 +286,7 @@
         showFiltersCb.dispatchEvent(new Event('change'));
         await delay(50);
 
-        expect(findByLabel('Event Filter')).to.not.be.null;
+        expect(findByLabel('Show Empty Filters')).to.not.be.null;
 
         // Verify adding of filter tag
         const addBtn = configPanelEl.querySelector('.filters.multifield-add');
@@ -312,7 +312,7 @@
         // The header is the part before the first / in the hash
         // Due to this we only compare the characters after the header value
 
-        const hashWithoutHeader = 'bNhD9Fz47Wafb9kFva+8uYsCbdWMv+lAExZgcSYQpjkoO7VWK/ntB6u44b9I55FzOXPivAKU0a7JgvuI/AT3vwEHlRfbXt4UAC6ZhLf2ajEEZz32BCkUmxIQ8OJCnTVU79F6TFVkOxmM8oLZUaHmAorcXmNYULLtmC7YYTh6JThW400aS3WP01LqY4m/WTxgJTu25MTGWEkz+oURdlNwxB80GH6SMAR210dxs8YxGZL8vhBxSWbHtTdROV+AaMaXHTEcsGb4G9/r7gFkGbdGJTHz6Zbl8gfc/teKyo9Dyoalx1EO2WohMSACfdb93wccLwTNVa3Cqs83wkNyJTPzt0eRiIRR9Id7C92ZLoAY1lfZwNLgCa9H5EXaQ8+Nx+EeratI2Cnq5XD6CoiN+lFTdyVJX6OAD1PpuzFLEG2ftyFZouyrguzRBoYpRdil10JhjDsYcQZ6eRndiIXIEDm52M9eG0T2dB+stsAraqB3YWL7UQBWwlgO9JQmdKgZznuCFliIT5AZo5sevk74zaF/S5amquRk0KgJzquav72IhSgQ1mCm1wjXDRs3/x8Qj8AiMG8vozmAGo9peSWTAFgEK7Pug/7/DqLqBhkJqnBhHqCNEoF7I4c0OtsRXY0fWNDG3VTdOg+xdQOSuLtRQaJtkfbC6Sh+DHyhQiemRJxu7bWy/kfkjgGXNybe9wXc5dUCq1Ei+eTyUWOH9eNGAxJKMQvfmTNsjDn0w7HfodknA3xbCIzhZPms0fWk8SrIKXDNmOEB7Ck5iD3IUZkVOTQfHl3RJOKgC5/AzEaN71GetYptMmF5r/5x66zb3aueFSCb7Xp1gm6sz+5TiDDoQxxWe1BgJchxb8MHLH7BHvAG+kNK5nhQzEZhDMHEoVX+vJdrK76gO9exCi38Fq6jaQ1UbPdn16UAc8j05nqHP3U6YgX1E1yn0+A9ptG7nEHp0Z9JuR2RE9mm5XF4RKUoU2X2Lt+/HleEEXrnrekeUcDl58W0hGArfNufPd2o8I+JRVyDHnX7WceWIAbueKI5zEBdcfOLQxyWnkEEbf8B3fq27/ae6Oi0Ex1A/Iyhti+7lE+V9JGKXpJ47UJzKKMZCBI/baDpaG5wGj69ndAaarbansacm72dgphsLKHh0G5tTHKr//gcEWd70YggAAA==';
+        const hashWithoutHeader = 'Dv6ajAgAAAA==';
 
         const hash = copyTextArea.value.split('#')[1].trim();
 
@@ -350,6 +350,28 @@
         // v2 getHashConfig is async
         const hashConfig = await getHashConfig();
         expect(hashConfig.cardStyle).to.equal('full-card');
+      });
+
+      it('adds a button with a title attribute that shows hover message', async () => {
+        // Simulate a caas-config element with a .consonant-Card element
+        const cardElement = document.createElement('div');
+        cardElement.classList.add('consonant-Card');
+        cardElement.id = 'test-card-id';
+        document.body.appendChild(cardElement);
+
+        // Call the addIdOverlays function to add the button
+        addIdOverlays();
+
+        // Find the newly created button
+        const idButton = cardElement.querySelector('.cardid');
+
+        // Verify the button exists and the title is correctly set
+        expect(idButton).to.not.be.null;
+        expect(idButton.innerText).to.equal('test-card-id');
+        expect(idButton.title).to.equal('Click to copy this ID');
+
+        // Clean up after the test
+        document.body.removeChild(cardElement);
       });
 
     });

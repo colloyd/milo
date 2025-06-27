@@ -8,6 +8,7 @@ import {
   arrayToObj,
   getPageLocale,
   getCountryAndLang,
+  stageMapToCaasTransforms,
 } from '../../../libs/blocks/caas/utils.js';
 
 const mockLocales = ['ar', 'br', 'ca', 'ca_fr', 'cl', 'co', 'la', 'mx', 'pe', '', 'africa', 'be_fr', 'be_en', 'be_nl',
@@ -161,6 +162,10 @@ describe('getConfig', () => {
     expect(config).to.be.eql({
       collection: {
         mode: 'lightest',
+        partialLoadWithBackgroundFetch: {
+          enabled: false,
+          partialLoadCount: 100,
+        },
         layout: { type: '4up', gutter: '4x', container: '1200MaxWidth' },
         button: { style: 'primary' },
         collectionButtonStyle: 'primary',
@@ -178,6 +183,7 @@ describe('getConfig', () => {
         i18n: {
           cardTitleAccessibilityLevel: 6,
           lastModified: 'Last modified {date}',
+          playVideo: 'Play, {cardTitle}',
           prettyDateIntervalFormat: '{ddd}, {LLL} {dd} | {timeRange} {timeZone}',
           totalResultsText: '{total} Results',
           title: '',
@@ -190,6 +196,7 @@ describe('getConfig', () => {
         showFooterDivider: false,
         useOverlayLinks: false,
         additionalRequestParams: {},
+        dynamicCTAForLiveEvents: false,
         banner: {
           register: { description: 'Sign Up', url: '#registration' },
           upcoming: { description: 'Upcoming' },
@@ -206,7 +213,7 @@ describe('getConfig', () => {
       hideCtaTags: [],
       filterPanel: {
         enabled: true,
-        eventFilter: '',
+        eventFilter: [],
         type: 'left',
         showEmptyFilters: false,
         categories: [
@@ -362,7 +369,7 @@ describe('getConfig', () => {
         loadMoreButton: { style: 'primary', useThemeThree: false },
         type: 'paginator',
         i18n: {
-          loadMore: { btnText: 'Load More', resultsQuantityText: '{start} of {end} displayed' },
+          loadMore: { btnText: 'Load more', resultsQuantityText: '{start} of {end} displayed' },
           paginator: {
             resultsQuantityText: '{start} - {end} of {total} results',
             prevLabel: 'Prev',
@@ -396,6 +403,7 @@ describe('getConfig', () => {
       },
       language: 'en',
       country: 'us',
+      linkTransformer: {},
       customCard: [
         'card',
         'return ``',
@@ -424,6 +432,10 @@ describe('getConfig', () => {
     expect(config).to.be.eql({
       collection: {
         mode: 'lightest',
+        partialLoadWithBackgroundFetch: {
+          enabled: false,
+          partialLoadCount: 100,
+        },
         layout: { type: '4up', gutter: '4x', container: '1200MaxWidth' },
         button: { style: 'primary' },
         collectionButtonStyle: 'primary',
@@ -441,6 +453,7 @@ describe('getConfig', () => {
         i18n: {
           cardTitleAccessibilityLevel: 6,
           lastModified: 'Last modified {date}',
+          playVideo: 'Play, {cardTitle}',
           prettyDateIntervalFormat: '{ddd}, {LLL} {dd} | {timeRange} {timeZone}',
           totalResultsText: '{total} Results',
           title: '',
@@ -453,6 +466,7 @@ describe('getConfig', () => {
         showFooterDivider: false,
         useOverlayLinks: false,
         additionalRequestParams: {},
+        dynamicCTAForLiveEvents: false,
         banner: {
           register: { description: 'Sign Up', url: '#registration' },
           upcoming: { description: 'Upcoming' },
@@ -469,7 +483,7 @@ describe('getConfig', () => {
       hideCtaTags: [],
       filterPanel: {
         enabled: true,
-        eventFilter: '',
+        eventFilter: [],
         type: 'left',
         showEmptyFilters: false,
         categories: [
@@ -625,7 +639,7 @@ describe('getConfig', () => {
         loadMoreButton: { style: 'primary', useThemeThree: false },
         type: 'paginator',
         i18n: {
-          loadMore: { btnText: 'Load More', resultsQuantityText: '{start} of {end} displayed' },
+          loadMore: { btnText: 'Load more', resultsQuantityText: '{start} of {end} displayed' },
           paginator: {
             resultsQuantityText: '{start} - {end} of {total} results',
             prevLabel: 'Prev',
@@ -668,7 +682,28 @@ describe('getConfig', () => {
         enabled: true,
         lastViewedSession: '',
       },
+      linkTransformer: {},
     });
+  });
+
+  it('should pass stageDomainsMap as caasLinkTransformer on stage', async () => {
+    expect(stageMapToCaasTransforms({
+      env: { name: 'stage' },
+      stageDomainsMap: { localhost: { 'www.adobe.com': 'stage.adobe.com', 'business.adobe.com': 'origin' } },
+    })).to.eql({
+      enabled: true,
+      hostnameTransforms: [
+        { from: 'www.adobe.com', to: 'stage.adobe.com' },
+        { from: 'business.adobe.com', to: 'localhost' },
+      ],
+    });
+  });
+
+  it('should not pass stageDomainsMap as caasLinkTransformer on prod', async () => {
+    expect(stageMapToCaasTransforms({
+      env: { name: 'prod' },
+      stageDomainsMap: { localhost: { 'www.adobe.com': 'stage.adobe.com', 'business.adobe.com': 'origin' } },
+    })).to.eql({});
   });
 });
 
@@ -736,6 +771,21 @@ describe('getCountryAndLang', () => {
       locales: '',
     });
   });
+
+  it('should include partial load settings in the config', async () => {
+    const state = {
+      ...defaultState,
+      partialLoadEnabled: true,
+      partialLoadCount: 75,
+    };
+
+    const config = await getConfig(state, strings);
+
+    expect(config.collection.partialLoadWithBackgroundFetch).to.deep.equal({
+      enabled: true,
+      partialLoadCount: 75,
+    });
+  });
 });
 
 describe('getFloodgateCaasConfig', () => {
@@ -748,6 +798,10 @@ describe('getFloodgateCaasConfig', () => {
     expect(caasFgConfig).to.be.eql({
       collection: {
         mode: 'lightest',
+        partialLoadWithBackgroundFetch: {
+          enabled: false,
+          partialLoadCount: 100,
+        },
         layout: { type: '4up', gutter: '4x', container: '1200MaxWidth' },
         button: { style: 'primary' },
         collectionButtonStyle: 'primary',
@@ -765,6 +819,7 @@ describe('getFloodgateCaasConfig', () => {
         i18n: {
           cardTitleAccessibilityLevel: 6,
           lastModified: 'Last modified {date}',
+          playVideo: 'Play, {cardTitle}',
           prettyDateIntervalFormat: '{ddd}, {LLL} {dd} | {timeRange} {timeZone}',
           totalResultsText: '{total} Results',
           title: '',
@@ -777,6 +832,7 @@ describe('getFloodgateCaasConfig', () => {
         showFooterDivider: false,
         useOverlayLinks: false,
         additionalRequestParams: {},
+        dynamicCTAForLiveEvents: false,
         banner: {
           register: { description: 'Sign Up', url: '#registration' },
           upcoming: { description: 'Upcoming' },
@@ -793,7 +849,7 @@ describe('getFloodgateCaasConfig', () => {
       hideCtaTags: [],
       filterPanel: {
         enabled: true,
-        eventFilter: '',
+        eventFilter: [],
         type: 'left',
         showEmptyFilters: false,
         categories: [
@@ -949,7 +1005,7 @@ describe('getFloodgateCaasConfig', () => {
         loadMoreButton: { style: 'primary', useThemeThree: false },
         type: 'paginator',
         i18n: {
-          loadMore: { btnText: 'Load More', resultsQuantityText: '{start} of {end} displayed' },
+          loadMore: { btnText: 'Load more', resultsQuantityText: '{start} of {end} displayed' },
           paginator: {
             resultsQuantityText: '{start} - {end} of {total} results',
             prevLabel: 'Prev',
@@ -992,6 +1048,7 @@ describe('getFloodgateCaasConfig', () => {
         enabled: true,
         lastViewedSession: '',
       },
+      linkTransformer: {},
     });
   });
 });

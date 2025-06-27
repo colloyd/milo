@@ -26,6 +26,7 @@ export const defaultConfig = {
   loaderDuration: 7500,
   redirectUrl: '#soup',
   productName: 'photoshop',
+  pauseOnHover: 'off',
   ...DISMISSAL_CONFIG,
 };
 
@@ -36,6 +37,7 @@ export const initPep = async ({ entName = 'firefly-web-usage', isAnchorOpen = fa
     imsClientId: 'milo',
     codeRoot: '/libs',
     locales: { '': { ietf: 'en-US', tk: 'hah7vzn.css' } },
+    georouting: { loadedPromise: Promise.resolve() },
   });
   updateConfig({ ...getConfig(), entitlements: () => ['firefly-web-usage'] });
   await setViewport(viewports.desktop);

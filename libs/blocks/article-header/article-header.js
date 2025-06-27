@@ -9,7 +9,7 @@ async function validateAuthorUrl(url) {
   const resp = await fetch(`${url.toLowerCase()}.plain.html`);
   if (!resp?.ok) {
     /* c8 ignore next 3 */
-    window.lana?.log(`Could not retrieve metadata for ${url}`, { tags: 'errorType=warn,module=article-header' });
+    window.lana?.log(`Could not retrieve metadata for ${url}`, { tags: 'article-header' });
     return null;
   }
 
@@ -32,14 +32,15 @@ function openPopup(e) {
 }
 
 async function buildAuthorInfo(authorEl, bylineContainer) {
-  const { href, textContent } = authorEl;
+  const { textContent } = authorEl;
   const config = getConfig();
+  const link = authorEl.href || authorEl.dataset.authorPage || `${config.locale.contentRoot}/authors/${textContent.replace(/[^0-9a-z]/gi, '-').toLowerCase()}`;
   const base = config.miloLibs || config.codeRoot;
   const authorImg = createTag('div', { class: 'article-author-image' });
   authorImg.style.backgroundImage = `url(${base}/blocks/article-header/adobe-logo.svg)`;
   bylineContainer.prepend(authorImg);
 
-  const doc = await validateAuthorUrl(href);
+  const doc = await validateAuthorUrl(link);
   if (!doc) {
     const p = createTag('p', null, textContent);
     authorEl.replaceWith(p);
@@ -48,7 +49,7 @@ async function buildAuthorInfo(authorEl, bylineContainer) {
 
   const img = doc.querySelector('img');
   if (img) {
-    img.setAttribute('alt', authorEl.textContent);
+    img.setAttribute('alt', textContent);
     authorImg.append(img);
     if (!img.complete) {
       img.addEventListener('load', () => {
@@ -61,6 +62,12 @@ async function buildAuthorInfo(authorEl, bylineContainer) {
     } else {
       authorImg.style.backgroundImage = 'none';
     }
+  }
+
+  if (getMetadata('article-author-link') === 'off' && authorEl.nodeName === 'A') {
+    const parent = authorEl.parentElement;
+    authorEl.remove();
+    parent.textContent = textContent;
   }
 }
 
@@ -107,20 +114,24 @@ async function buildSharing() {
     twitter: {
       'data-href': `https://www.twitter.com/share?&url=${url}&text=${title}`,
       'aria-label': 'share twitter',
+      tabindex: '0',
     },
     linkedin: {
       'data-type': 'LinkedIn',
       'data-href': `https://www.linkedin.com/shareArticle?mini=true&url=${url}&title=${title}&summary=${description || ''}`,
       'aria-label': 'share linkedin',
+      tabindex: '0',
     },
     facebook: {
       'data-type': 'Facebook',
       'data-href': `https://www.facebook.com/sharer/sharer.php?u=${url}`,
       'aria-label': 'share facebook',
+      tabindex: '0',
     },
     link: {
       id: 'copy-to-clipboard',
       'aria-label': 'copy to clipboard',
+      tabindex: '0',
     },
   };
 
@@ -177,6 +188,15 @@ function decorateFigure(el) {
   el.lastElementChild.remove();
 }
 
+function decorateMedia(el) {
+  if (el.querySelector('picture')) {
+    decorateFigure(el);
+    return;
+  }
+
+  el.classList.add('article-feature-video');
+}
+
 export default async function init(blockEl) {
   const childrenEls = Array.from(blockEl.children);
   const categoryContainer = childrenEls[0];
@@ -197,7 +217,7 @@ export default async function init(blockEl) {
   bylineContainer.firstElementChild.classList.add('article-byline-info');
 
   const authorContainer = bylineContainer.firstElementChild.firstElementChild;
-  const authorEl = authorContainer.querySelector('a');
+  const authorEl = authorContainer.firstElementChild || authorContainer;
   authorContainer.classList.add('article-author');
 
   buildAuthorInfo(authorEl, bylineContainer);
@@ -209,8 +229,8 @@ export default async function init(blockEl) {
   const shareBlock = await buildSharing();
   bylineContainer.append(shareBlock);
 
-  const featureImgContainer = childrenEls[3];
-  decorateFigure(featureImgContainer);
+  const mediaContainer = childrenEls[3];
+  decorateMedia(mediaContainer);
 
   document.addEventListener('milo:deferred', () => updateShareText(shareBlock));
 }

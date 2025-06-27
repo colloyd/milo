@@ -248,11 +248,37 @@ const beforeSubmitCallback = () => {
       }),
     })
       .catch((error) => {
-        window.lana.log(`AA Sandbox Error: ${error.reason || error.error || error.message || error}`, { tags: 'errorType=info,module=faas' });
+        window.lana.log(`AA Sandbox Error: ${error.reason || error.error || error.message || error}`, { tags: 'faas', errorType: 'i' });
       });
   }
 };
 /* c8 ignore stop */
+
+export const afterSubmitCallback = (e) => {
+  const config = getConfig();
+  if (!e.success || !(config.faasCloseModalAfterSubmit === 'on')) return;
+  const faasForms = document.querySelectorAll('.dialog-modal .faas');
+  if (faasForms.length !== 1) return;
+  const faas = faasForms[0];
+  const dialogModal = faas.closest('.dialog-modal');
+  if (!dialogModal) return;
+  const closeBtn = dialogModal.querySelector('.dialog-close');
+  const faasFormWrapper = dialogModal.querySelector('.faas-form-wrapper');
+  if (!faasFormWrapper) return;
+  const overlay = createTag('div', { class: 'faas-form-confirm-overlay' });
+  const checkIcon = createTag('img', {
+    class: 'icon-milo checkmark-green',
+    src: `${config.miloLibs || config.codeRoot}/ui/img/checkmark-green.svg`,
+    alt: 'checkmark-green',
+  });
+  overlay.append(checkIcon);
+  faasFormWrapper.append(overlay);
+
+  checkIcon.addEventListener('animationend', () => {
+    if (faas.reset) faas.reset();
+    if (closeBtn) closeBtn.click();
+  }, { passive: true, once: true });
+};
 
 export const makeFaasConfig = (targetState) => {
   if (!targetState) {
@@ -293,6 +319,7 @@ export const makeFaasConfig = (targetState) => {
     e: {
       afterYiiLoadedCallback,
       beforeSubmitCallback,
+      afterSubmitCallback,
     },
     style_backgroundTheme: targetState.style_backgroundTheme || 'white',
     style_layout: targetState.style_layout || 'column1',

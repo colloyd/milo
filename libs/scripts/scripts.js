@@ -19,14 +19,28 @@ import {
 import locales from '../utils/locales.js';
 
 // Production Domain
-const prodDomains = ['milo.adobe.com'];
+const prodDomains = ['milo.adobe.com', 'business.adobe.com', 'www.adobe.com', 'news.adobe.com'];
 
 const stageDomainsMap = {
-  'www.adobe.com': 'www.stage.adobe.com',
-  'blog.adobe.com': 'blog.stage.adobe.com',
-  'business.adobe.com': 'business.stage.adobe.com',
-  'helpx.adobe.com': 'helpx.stage.adobe.com',
-  'news.adobe.com': 'news.stage.adobe.com',
+  'www.stage.adobe.com': {
+    'www.adobe.com': 'origin',
+    'helpx.adobe.com': 'helpx.stage.adobe.com',
+  },
+  '--bacom--adobecom.hlx.live': {
+    'business.adobe.com': 'origin',
+    'news.adobe.com': 'main--news--adobecom.hlx.live',
+  },
+  '--blog--adobecom.hlx.page': {
+    'blog.adobe.com': 'origin',
+    'business.adobe.com': 'main--bacom--adobecom.hlx.page',
+  },
+  '.business-graybox.adobe.com': { 'business.adobe.com': 'origin' },
+  '^https://.*--milo--.*.(hlx|aem).page': {
+    '^https://www.adobe.com/acrobat': 'https://main--dc--adobecom.hlx.page',
+    '^https://business.adobe.com(?!/blog)': 'https://business.stage.adobe.com',
+    '^https://business.adobe.com/blog': 'https://main--bacom-blog--adobecom.hlx.page',
+    '^https://www.adobe.com': 'origin',
+  },
 };
 
 const config = {
@@ -36,6 +50,23 @@ const config = {
   imsClientId: 'milo',
   codeRoot: '/libs',
   locales,
+  languages: {
+    en: {
+      tk: 'hah7vzn.css',
+      regions: [
+        { region: 'us' },
+        { region: 'gb' },
+        { region: 'apac', ietf: 'en' },
+      ],
+    },
+    de: {
+      tk: 'hah7vzn.css',
+      regions: [
+        { region: 'ch' },
+        { region: 'de' },
+      ],
+    },
+  },
   prodDomains,
   stageDomainsMap,
   jarvis: {

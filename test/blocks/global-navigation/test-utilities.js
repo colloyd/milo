@@ -2,11 +2,11 @@
 /* eslint-disable import/prefer-default-export */
 import sinon, { stub } from 'sinon';
 import { setViewport } from '@web/test-runner-commands';
-import initGnav, { LANGMAP } from '../../../libs/blocks/global-navigation/global-navigation.js';
 import { setConfig, loadStyle } from '../../../libs/utils/utils.js';
 import defaultPlaceholders from './mocks/placeholders.js';
 import defaultProfile from './mocks/profile.js';
 import largeMenuMock from './mocks/large-menu.plain.js';
+import mockMegaMenu from './mocks/mock-megamenu.plain.js';
 import largeMenuActiveMock from './mocks/large-menu-active.plain.js';
 import largeMenuWideColumnMock from './mocks/large-menu-wide-column.plain.js';
 import largeMenuCrossCloud from './mocks/large-menu-cross-cloud.plain.js';
@@ -38,10 +38,12 @@ export const selectors = {
   promo: '.feds-promo',
   promoImage: '.feds-promo-image',
   topNavWrapper: '.feds-topnav-wrapper',
+  topNav: '.feds-topnav',
   breadcrumbsWrapper: '.feds-breadcrumbs-wrapper',
   mainNav: '.feds-nav',
   imsSignIn: '.feds-signIn',
   crossCloudMenuWrapper: '.feds-crossCloudMenu-wrapper',
+  customMobileLink: '.feds-navItem--mobile-only',
 };
 
 export const viewports = {
@@ -77,7 +79,16 @@ export const analyticsTestData = {
   'unc|click|markUnread': 'Mark Notification as unread',
 };
 
-export const unavLocalesTestData = Object.entries(LANGMAP).reduce((acc, curr) => {
+export const unavVersion = '1.4';
+
+export const addMetaDataV2 = (value) => {
+  const metaTag = document.createElement('meta');
+  metaTag.name = 'mobile-gnav-v2';
+  metaTag.content = value;
+  return metaTag;
+};
+
+export const unavLocalesTestData = (LANGMAP) => Object.entries(LANGMAP).reduce((acc, curr) => {
   const result = [];
   const [locale, prefixes] = curr;
   prefixes.forEach((prefix) => (result.push({
@@ -161,11 +172,9 @@ export const createFullGlobalNavigation = async ({
   hasPromo,
   hasBreadcrumbs = true,
   unavContent = null,
+  imsInitialized = false,
 } = {}) => {
-  const clock = sinon.useFakeTimers({
-    // Intercept setTimeout and call the function immediately
-    toFake: ['setTimeout'],
-  });
+  const clock = sinon.useFakeTimers({ shouldAdvanceTime: true });
   setConfig({ ...config, ...customConfig });
   await setViewport(viewports[viewport]);
   window.lana = { log: stub() };
@@ -176,15 +185,17 @@ export const createFullGlobalNavigation = async ({
     if (url.endsWith('large-menu-cross-cloud.plain.html')) { return mockRes({ payload: largeMenuCrossCloud }); }
     if (url.endsWith('large-menu-active.plain.html')) { return mockRes({ payload: largeMenuActiveMock }); }
     if (url.endsWith('large-menu-wide-column.plain.html')) { return mockRes({ payload: largeMenuWideColumnMock }); }
-    if (url.includes('https://main--federal--adobecom.hlx.page')
+    if (url.includes('https://main--federal--adobecom.aem.page')
       && url.endsWith('feds-menu.plain.html')) { return mockRes({ payload: largeMenuMock }); }
     if (url.includes('gnav')) { return mockRes({ payload: globalNavigation || globalNavigationMock }); }
     if (url.includes('correct-promo-fragment')) { return mockRes({ payload: correctPromoFragmentMock }); }
     if (url.includes('wrong-promo-fragment')) { return mockRes({ payload: '<div>Non-promo content</div>' }); }
     if (url.includes('UniversalNav')) { return mockRes({ payload: {} }); }
+    if (url.includes('mock-megamenu')) { return mockRes({ payload: mockMegaMenu }); }
     return null;
   });
   window.adobeIMS = {
+    initialized: imsInitialized,
     isSignedInUser: stub().returns(signedIn),
     getAccessToken: stub().returns('mock-access-token'),
     getProfile: stub().returns(
@@ -205,16 +216,28 @@ export const createFullGlobalNavigation = async ({
       ${breadcrumbsEl}
     </header>`);
 
+  if (hasPromo) {
+    document.body.prepend(toFragment`<div class="feds-promo-aside-wrapper"></div>`);
+  }
+
   await Promise.all([
     loadStyles('../../../../libs/styles/styles.css'),
     loadStyles(
       '../../../../libs/blocks/global-navigation/global-navigation.css',
     ),
   ]);
-
-  const instance = await initGnav(document.body.querySelector('header'));
-  instance.imsReady();
-  await clock.runAllAsync();
+  // After optimizing the gnav load, certain operations (e.g. getGnavSource) on load of
+  // the js file rather than on init. The queryparamenter supports this by reloading
+  // the module each time we get here.
+  const url = `../../../libs/blocks/global-navigation/global-navigation.js?reimport=${crypto.randomUUID()}`;
+  const { default: initGnav } = await import(url);
+  const instancePromise = initGnav(document.body.querySelector('header'));
+  await clock.runToLastAsync();
+  clock.tick(1000);
+  const instance = await instancePromise;
+  const imsPromise = instance.imsReady();
+  await clock.runToLastAsync();
+  clock.tick(1000);
   // We restore the clock here, because waitForElement uses setTimeout
   clock.restore();
 
@@ -239,6 +262,7 @@ export const createFullGlobalNavigation = async ({
     waitForElements.push(waitForElement(selectors.breadcrumbsWrapper, document.body));
   }
   await Promise.all(waitForElements);
+  await imsPromise;
 
   window.fetch = ogFetch;
   window.adobeIMS = undefined;

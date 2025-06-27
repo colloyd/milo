@@ -1,12 +1,13 @@
+/* eslint import/no-relative-packages: 0 */
 import { readFile } from '@web/test-runner-commands';
 import { expect } from '@esm-bundle/chai';
-import { stub, useFakeTimers, restore } from 'sinon';
+import { stub, useFakeTimers, restore, spy } from 'sinon';
 import loadBlock from '../../libs/navigation/bootstrapper.js';
 import fetchedFooter from '../blocks/global-footer/mocks/fetched-footer.js';
 import placeholders from '../blocks/global-navigation/mocks/placeholders.js';
 import { setConfig } from '../../libs/utils/utils.js';
-
-document.body.innerHTML = await readFile({ path: './mocks/body.html' });
+import { mockRes } from '../blocks/global-navigation/test-utilities.js';
+import gnavLocalNav from './mocks/gnav-with-localnav.plain.js';
 
 const blockConfig = {
   footer: {
@@ -18,23 +19,16 @@ const blockConfig = {
     name: 'global-navigation',
     targetEl: 'header',
     appendType: 'prepend',
-    unavComponents: 'profile',
+    unav: { unavComponents: 'profile' },
   },
 };
 
 const miloLibs = 'http://localhost:2000/libs';
 
-const mockRes = ({ payload, status = 200, ok = true } = {}) => new Promise((resolve) => {
-  resolve({
-    status,
-    ok,
-    json: () => payload,
-    text: () => payload,
-  });
-});
-
 describe('Bootstrapper', async () => {
+  let openMessagingWindowSpy;
   beforeEach(async () => {
+    document.body.innerHTML = await readFile({ path: './mocks/body.html' });
     stub(window, 'fetch').callsFake(async (url) => {
       if (url.includes('/footer')) {
         return mockRes({
@@ -43,19 +37,31 @@ describe('Bootstrapper', async () => {
           ),
         });
       }
+      if (url.includes('/localnav/gnav.plain.html')) return mockRes({ payload: gnavLocalNav });
       if (url.includes('/placeholders')) return mockRes({ payload: placeholders });
       if (url.includes('/footer.plain.html')) return mockRes({ payload: await readFile({ path: '../blocks/region-nav/mocks/regions.html' }) });
+      if (url.includes('/gnav.plain.html')) return mockRes({ payload: await readFile({ path: './mocks/gnav.html' }) });
+
       return null;
     });
+    window.AdobeMessagingExperienceClient = window.AdobeMessagingExperienceClient
+      || {
+        openMessagingWindow: () => { },
+        isAdobeMessagingClientInitialized: () => { },
+        getMessagingExperienceState: () => { },
+      };
+    openMessagingWindowSpy = spy(window.AdobeMessagingExperienceClient, 'openMessagingWindow');
     setConfig({ miloLibs, contentRoot: '/federal/dev' });
   });
 
   afterEach(() => {
+    document.body.innerHTML = '';
     restore();
   });
 
   it('Renders the footer block', async () => {
-    await loadBlock(miloLibs, blockConfig.footer);
+    const { default: init } = await import('../../libs/blocks/global-footer/global-footer.js');
+    await loadBlock(init, blockConfig.footer);
     const clock = useFakeTimers({
       toFake: ['setTimeout'],
       shouldAdvanceTime: true,
@@ -66,8 +72,58 @@ describe('Bootstrapper', async () => {
   });
 
   it('Renders the header block', async () => {
-    await loadBlock(miloLibs, blockConfig.header);
+    const { default: init } = await import('../../libs/blocks/global-navigation/global-navigation.js');
+    await loadBlock(init, blockConfig.header);
     const el = document.getElementsByTagName('header');
     expect(el).to.exist;
+  });
+
+  it('Renders the header with full width', async () => {
+    blockConfig.header.layout = 'fullWidth';
+    const { default: init } = await import('../../libs/blocks/global-navigation/global-navigation.js');
+    await loadBlock(init, blockConfig.header);
+    const el = document.querySelector('header');
+    expect(el.classList.contains('feds--full-width')).to.be.true;
+  });
+
+  it('Renders the header with no border bottom', async () => {
+    blockConfig.header.noBorder = true;
+    const { default: init } = await import('../../libs/blocks/global-navigation/global-navigation.js');
+    await loadBlock(init, blockConfig.header);
+    const el = document.querySelector('header');
+    expect(el.classList.contains('feds--no-border')).to.be.true;
+  });
+
+  it('Renders the localnav', async () => {
+    blockConfig.header.isLocalNav = true;
+    blockConfig.header.mobileGnavV2 = true;
+    setConfig({ contentRoot: '/federal/localnav' });
+    const { default: init } = await import('../../libs/blocks/global-navigation/global-navigation.js?unique=unique'); // eslint-disable-line
+    await loadBlock(init, blockConfig.header);
+    const el = document.querySelector('header');
+    expect(el.nextElementSibling.classList.contains('feds-localnav')).to.be.true;
+  });
+
+  it('should call openMessagingWindow when click on jarvis enabled button', async () => {
+    blockConfig.header.jarvis = { id: '1.1' };
+    stub(window.AdobeMessagingExperienceClient, 'isAdobeMessagingClientInitialized').returns(true);
+    stub(window.AdobeMessagingExperienceClient, 'getMessagingExperienceState').returns({ windowState: 'hidden' });
+    const { default: init } = await import('../../libs/blocks/global-navigation/global-navigation.js');
+    await loadBlock(init, blockConfig.header);
+    const el = document.querySelector('.feds-cta[href*="#open-jarvis-chat"]');
+    const event = new CustomEvent('click', { bubbles: true });
+    el.dispatchEvent(event);
+    expect(openMessagingWindowSpy.called).to.be.true;
+  });
+
+  it('should not call openMessagingWindow when chat dialog is already open', async () => {
+    stub(window.AdobeMessagingExperienceClient, 'isAdobeMessagingClientInitialized').returns(true);
+    stub(window.AdobeMessagingExperienceClient, 'getMessagingExperienceState').returns({ windowState: 'docked' });
+    const { default: init } = await import('../../libs/blocks/global-navigation/global-navigation.js');
+    await loadBlock(init, blockConfig.header);
+    const el = document.querySelector('.feds-cta[href*="#open-jarvis-chat"]');
+    const event = new CustomEvent('click', { bubbles: true });
+    el.dispatchEvent(event);
+    expect(openMessagingWindowSpy.called).to.be.false;
   });
 });

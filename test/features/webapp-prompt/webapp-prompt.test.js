@@ -144,39 +144,79 @@ describe('PEP', () => {
 
   describe('PEP interaction tests', () => {
     it('should close PEP on Escape key', async () => {
+      const clock = sinon.useFakeTimers();
       await initPep({});
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      clock.tick(10000);
       expect(document.querySelector(allSelectors.pepWrapper)).to.not.exist;
+      expect(window.location.hash).to.not.equal('#soup');
+      clock.uninstall();
     });
 
     it('should close PEP on clicking the close icon', async () => {
+      const clock = sinon.useFakeTimers();
       await initPep({});
       document.querySelector(allSelectors.closeIcon).click();
+      clock.tick(10000);
       expect(document.querySelector(allSelectors.pepWrapper)).to.not.exist;
+      expect(window.location.hash).to.not.equal('#soup');
+      clock.uninstall();
     });
 
     it('should close PEP on clicking the CTA', async () => {
+      const clock = sinon.useFakeTimers();
       await initPep({});
       document.querySelector(allSelectors.cta).click();
+      clock.tick(10000);
       expect(document.querySelector(allSelectors.pepWrapper)).to.not.exist;
+      expect(window.location.hash).to.not.equal('#soup');
+      clock.uninstall();
     });
 
     it('should close PEP on clicking the anchor element', async () => {
+      const clock = sinon.useFakeTimers();
       await initPep({});
       document.querySelector(allSelectors.appSwitcher).click();
+      clock.tick(10000);
       expect(document.querySelector(allSelectors.pepWrapper)).to.not.exist;
+      expect(window.location.hash).to.not.equal('#soup');
+      clock.uninstall();
+    });
+
+    it('stops the PEP timer when mouseenter event occur on PEP content with feature pause on hover', async () => {
+      sinon.restore();
+      const clock = sinon.useFakeTimers();
+      stub(window, 'fetch').callsFake(async (url) => {
+        if (url.includes('pep-prompt-content.plain.html')) return mockRes({ payload: pepPromptContent({ ...defaultConfig, pauseOnHover: 'on' }) });
+        return null;
+      });
+      await initPep({});
+      document.querySelector(allSelectors.pepWrapper).dispatchEvent(new Event('mouseenter'));
+      clock.tick(10000);
+      expect(window.location.hash).to.not.equal('#soup');
+      clock.uninstall();
     });
 
     it('redirects when the PEP timer runs out', async () => {
       const clock = sinon.useFakeTimers();
       await initPep({});
-
       expect(window.location.hash).to.not.equal('soup');
-
       clock.tick(10000);
-
       expect(window.location.hash).to.equal('#soup');
+      clock.uninstall();
+    });
 
+    it('redirects when the PEP timer runs out with pause on hover', async () => {
+      sinon.restore();
+      const clock = sinon.useFakeTimers();
+      stub(window, 'fetch').callsFake(async (url) => {
+        if (url.includes('pep-prompt-content.plain.html')) return mockRes({ payload: pepPromptContent({ ...defaultConfig, pauseOnHover: 'on' }) });
+        return null;
+      });
+      await initPep({});
+      expect(window.location.hash).to.not.equal('soup');
+      clock.tick(10000);
+      expect(window.location.hash).to.equal('#soup');
       clock.uninstall();
     });
   });
@@ -239,7 +279,7 @@ describe('PEP', () => {
         }),
       });
       expect(window.lana.log.getCalls().find((c) => c.args[0].includes('Error on getting anchor state'))).to.exist;
-      expect(window.lana.log.getCalls().find((c) => c.args[1].tags.includes('errorType=error,module=pep'))).to.exist;
+      expect(window.lana.log.getCalls().find((c) => c.args[1].tags.includes('pep'))).to.exist;
     });
 
     it('should send log when cannot fetch content for prompt', async () => {
@@ -256,7 +296,7 @@ describe('PEP', () => {
       });
       await initPep({});
       expect(window.lana.log.getCalls().find((c) => c.args[0].includes('Error fetching content for prompt'))).to.exist;
-      expect(window.lana.log.getCalls().find((c) => c.args[1].tags.includes('errorType=error,module=pep'))).to.exist;
+      expect(window.lana.log.getCalls().find((c) => c.args[1].tags.includes('pep'))).to.exist;
     });
   });
 });

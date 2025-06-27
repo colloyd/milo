@@ -7,6 +7,7 @@ import {
   selectors,
   isElementVisible,
   mockRes,
+  unavVersion,
 } from './test-utilities.js';
 
 const ogFetch = window.fetch;
@@ -17,10 +18,17 @@ describe('search', () => {
   let trigger;
 
   before(() => {
-    document.head.innerHTML = `<link rel="icon" href="/libs/img/favicons/favicon.ico" size="any">
-    <script src="https://auth.services.adobe.com/imslib/imslib.min.js" type="javascript/blocked" data-loaded="true"></script>
-    <script src="https://stage.adobeccstatic.com/unav/1.1/UniversalNav.js" type="javascript/blocked" data-loaded="true"></script>
-    `;
+    document.head.innerHTML = `
+    <link rel="icon" href="/libs/img/favicons/favicon.ico" size="any">
+    <script type="importmap">
+      {
+        "imports": {
+          "https://auth.services.adobe.com/imslib/imslib.min.js": "./mocks/imslib-mock.js",
+          "https://stage.adobeccstatic.com/unav/${unavVersion}/UniversalNav.js": "./mocks/unav-mock.js"
+        }
+      }
+    </script>
+  `;
   });
 
   afterEach(() => {

@@ -1,6 +1,5 @@
-import { getMetadata, getConfig } from '../../../../utils/utils.js';
+import { getMetadata, getConfig, getFederatedUrl } from '../../../../utils/utils.js';
 import { toFragment, lanaLog } from '../../utilities/utilities.js';
-import { getFederatedUrl } from '../../../../utils/federated.js';
 
 const metadata = {
   seo: 'breadcrumbs-seo',
@@ -21,13 +20,19 @@ const setBreadcrumbSEO = (breadcrumbs) => {
     '@type': 'BreadcrumbList',
     itemListElement: [],
   };
-  breadcrumbs.querySelectorAll('ul > li').forEach((item, idx) => {
+
+  breadcrumbs.querySelectorAll('ul > li').forEach((item, idx, list) => {
     const link = item.querySelector('a');
+    const name = link ? link.innerText.trim() : [...item.childNodes].filter((node) => !node.matches?.('span[aria-hidden="true"]')).map((node) => node.textContent.trim()).join('');
+    let itemUrl = link?.href;
+    if (!itemUrl && idx === list.length - 1) {
+      itemUrl = window.location.href;
+    }
     breadcrumbsSEO.itemListElement.push({
       '@type': 'ListItem',
       position: idx + 1,
-      name: link ? link.innerText.trim() : item.innerText.trim(),
-      item: link?.href,
+      name,
+      item: itemUrl,
     });
   });
   const script = toFragment`<script type="application/ld+json">${JSON.stringify(
@@ -53,13 +58,16 @@ const createBreadcrumbs = (element) => {
     .split(',')
     .map((item) => item.trim()) || [];
 
-  ul.querySelectorAll('li').forEach((li) => {
+  ul.querySelectorAll('li').forEach((li, index) => {
     if (hiddenEntries.includes(li.innerText?.toLowerCase().trim())) li.remove();
+    if (index > 0) li.insertAdjacentHTML('afterbegin', '<span aria-hidden="true">/</span>');
   });
+
+  const noTransform = element.classList.contains('no-transform') ? ' no-transform' : '';
 
   const breadcrumbs = toFragment`
     <div class="feds-breadcrumbs-wrapper">
-      <nav class="feds-breadcrumbs" aria-label="Breadcrumb">${ul}</nav>
+      <nav class="feds-breadcrumbs${noTransform}" aria-label="Breadcrumb">${ul}</nav>
     </div>
   `;
   ul.querySelector('li:last-of-type')?.setAttribute('aria-current', 'page');
@@ -77,7 +85,7 @@ const createWithBase = async (el) => {
     element.querySelector('ul')?.prepend(...base.querySelectorAll('li'));
     return createBreadcrumbs(element);
   } catch (e) {
-    lanaLog({ e, message: 'Breadcrumbs failed fetching base', tags: 'errorType=info,module=gnav-breadcrumbs' });
+    lanaLog({ e, message: 'Breadcrumbs failed fetching base', tags: 'gnav-breadcrumbs', errorType: 'i' });
     return null;
   }
 };
@@ -106,7 +114,7 @@ export default async function init(el) {
     setBreadcrumbSEO(breadcrumbsEl);
     return breadcrumbsEl;
   } catch (e) {
-    lanaLog({ e, message: 'Breadcrumbs failed rendering', tags: 'errorType=error,module=gnav-breadcrumbs' });
+    lanaLog({ e, message: 'Breadcrumbs failed rendering', tags: 'gnav-breadcrumbs', errorType: 'e' });
     return null;
   }
 }
