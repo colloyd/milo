@@ -182,7 +182,7 @@ function decorateLegal(el, legal) {
   if (el.classList.contains('sticky')) {
     legalSection.setAttribute('aria-live', 'polite');
     const closeButton = createTag('button', { class: 'bc-legal-close', 'aria-label': 'Close' }, closeIcon);
-    legalSection.append(closeButton);
+    // legalSection.append(closeButton);
     closeButton.addEventListener('click', () => {
       legalSection.classList.add('legal-closed');
       el.querySelector('.bc-input-field input').focus();
