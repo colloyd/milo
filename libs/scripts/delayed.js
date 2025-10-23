@@ -24,14 +24,27 @@ export const loadJarvisChat = async (getConfig, getMetadata, loadScript, loadSty
   initJarvisChat(config, loadScript, loadStyle, getMetadata);
 };
 
+export const loadBlockNotifications = async (getConfig, loadStyle) => {
+  const { env, miloLibs, codeRoot } = getConfig();
+
+  if (env.name === 'local' || window.location.host.includes('.page')) {
+    const base = miloLibs || codeRoot;
+    loadStyle(`${base}/styles/block-notifications.css`);
+
+    const { default: blockNotifications } = await import('../utils/block-notifications.js');
+    blockNotifications(base);
+  }
+};
+
 export const loadPrivacy = async (getConfig, loadScript) => {
-  const { privacyId, env } = getConfig();
+  const { privacyId, env, holdPrivacyBanner } = getConfig();
   const acom = '7a5eb705-95ed-4cc4-a11d-0cc5760e93db';
   const ids = {
     'hlx.page': 'f5b9e81a-54b5-40cb-afc3-84ca26e7dbaf-test',
     'hlx.live': '01958a9e-818e-7213-8d4a-8b3b7a4ec33e-test',
     'aem.page': '01954847-62a4-7afc-bdc7-f110c4e35b5d-test',
     'aem.live': '01954848-3f9e-7267-ac5d-d4076841aeb1-test',
+    'aem.reviews': '019928fc-0bcd-7c53-9cde-ea06b4fc7294-test',
   };
 
   const otDomainId = ids?.[Object.keys(ids)
@@ -41,11 +54,16 @@ export const loadPrivacy = async (getConfig, loadScript) => {
     privacy: { otDomainId },
     documentLanguage: true,
   };
-
+  if (holdPrivacyBanner === true) {
+    window.fedsConfig.privacy.holdBanner = 'hold-banner';
+  }
   // Load the privacy script
   let privacyEnv = '';
   if (env?.name !== 'prod') {
-    privacyEnv = new URLSearchParams(window.location.search).get('privacyEnv') || '';
+    const param = new URLSearchParams(window.location.search).get('privacyEnv') || '';
+    if (['dev01', 'dev02', 'qa01', 'stage'].includes(param)) {
+      privacyEnv = param;
+    }
   }
   loadScript(`https://www.${privacyEnv && `${privacyEnv}.`}adobe.com/etc.clientlibs/globalnav/clientlibs/base/privacy-standalone.js`);
 
@@ -77,6 +95,19 @@ export const loadAriaAutomation = async () => {
   addAriaLabels();
 };
 
+export const addRUMCampaignTrackingParameters = ({ sampleRUM }) => {
+  const usp = new URLSearchParams(window.location.search);
+  [
+    { key: 'sdid', utmKey: 'utm_campaign' },
+    { key: 'mv', utmKey: 'utm_source' },
+    { key: 'mv2', utmKey: 'utm_medium' },
+  ].forEach(({ key, utmKey }) => {
+    const val = usp.get(key);
+    if (!val || (key === 'sdid' && val.length > 8)) return;
+    sampleRUM('utm', { source: utmKey, target: val });
+  });
+};
+
 /**
  * Executes everything that happens a lot later, without impacting the user experience.
  */
@@ -92,6 +123,7 @@ const loadDelayed = ([
     loadAriaAutomation();
     loadJarvisChat(getConfig, getMetadata, loadScript, loadStyle);
     loadGoogleLogin(getMetadata, loadIms, loadScript, getConfig);
+    loadBlockNotifications(getConfig, loadStyle);
     if (getMetadata('interlinks') === 'on') {
       const { locale } = getConfig();
       const path = `${locale.contentRoot}/keywords.json`;
@@ -100,7 +132,10 @@ const loadDelayed = ([
     } else {
       resolve(null);
     }
-    import('../utils/samplerum.js').then(({ sampleRUM }) => sampleRUM());
+    import('../utils/samplerum.js').then(({ sampleRUM }) => {
+      sampleRUM();
+      addRUMCampaignTrackingParameters({ sampleRUM });
+    });
   }, DELAY);
 });
 

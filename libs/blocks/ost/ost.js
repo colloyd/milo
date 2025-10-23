@@ -92,12 +92,39 @@ export const createLinkMarkup = (
 };
 
 export async function loadOstEnv() {
-  /* c8 ignore next */
-  const { Log, Defaults, resolvePriceTaxFlags } = await import('../../deps/mas/commerce.js');
-  const { getMiloLocaleSettings } = await import('../merch/merch.js');
-
   const searchParameters = new URLSearchParams(window.location.search);
   const ostSearchParameters = new URLSearchParams();
+  // deprecate unsupported parameters
+  const wcsLandscape = searchParameters.get('wcsLandscape');
+  const commerceEnv = searchParameters.get('commerce.env');
+  if (wcsLandscape || commerceEnv) {
+    if (wcsLandscape) {
+      searchParameters.set('commerce.landscape', wcsLandscape);
+      searchParameters.delete('wcsLandscape');
+    }
+    if (commerceEnv?.toLowerCase() === 'stage') {
+      searchParameters.set('commerce.landscape', 'DRAFT');
+      searchParameters.delete('commerce.env');
+    }
+    window.history.replaceState({}, null, `${window.location.origin}${window.location.pathname}?${searchParameters.toString()}`);
+  }
+  /* c8 ignore next */
+  const { initService, loadMasComponent, getMasLibs, getMiloLocaleSettings, MAS_COMMERCE_SERVICE } = await import('../merch/merch.js');
+  await initService(true, { 'allow-override': 'true' });
+  // Load commerce.js based on masLibs parameter
+  await loadMasComponent(MAS_COMMERCE_SERVICE);
+
+  // Get the exports - they might be in different places depending on how it was loaded
+  let Log;
+  let Defaults;
+  let resolvePriceTaxFlags;
+  if (getMasLibs() && window.mas?.commerce) {
+    // Loaded from external URL - check global scope
+    ({ Log, Defaults, resolvePriceTaxFlags } = window.mas.commerce);
+  } else {
+    // Loaded as module
+    ({ Log, Defaults, resolvePriceTaxFlags } = await import('../../deps/mas/commerce.js'));
+  }
 
   const defaultPlaceholderOptions = Object.fromEntries([
     ['term', 'displayRecurrence', 'true'],
@@ -148,7 +175,7 @@ export async function loadOstEnv() {
   window.history.replaceState({}, null, newURL);
 
   const environment = searchParameters.get('env') ?? WCS_ENV;
-  const landscape = searchParameters.get('wcsLandscape') ?? WCS_LANDSCAPE;
+  const landscape = searchParameters.get('commerce.landscape') ?? WCS_LANDSCAPE;
   const owner = searchParameters.get('owner');
   const referrer = searchParameters.get('referrer');
   const repo = searchParameters.get('repo');

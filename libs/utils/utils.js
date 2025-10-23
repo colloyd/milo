@@ -12,6 +12,7 @@ const MILO_BLOCKS = [
   'article-header',
   'aside',
   'author-header',
+  'brand-concierge',
   'brick',
   'bulk-publish',
   'bulk-publish-v2',
@@ -26,12 +27,14 @@ const MILO_BLOCKS = [
   'chart',
   'columns',
   'editorial-card',
+  'email-collection',
   'faas',
   'featured-article',
   'figure',
   'form',
   'fragment',
   'featured-article',
+  'gist',
   'global-footer',
   'global-navigation',
   'graybox',
@@ -63,6 +66,7 @@ const MILO_BLOCKS = [
   'modal',
   'modal-metadata',
   'notification',
+  'nps-csat-form',
   'pdf-viewer',
   'quote',
   'read-more',
@@ -166,8 +170,7 @@ export const SLD = PAGE_URL.hostname.includes('.aem.') ? 'aem' : 'hlx';
 const PROMO_PARAM = 'promo';
 let isMartechLoaded = false;
 
-let localeToLanguageMap;
-let siteLanguages;
+let langConfig;
 
 export function getEnv(conf) {
   const { host } = window.location;
@@ -184,7 +187,8 @@ export function getEnv(conf) {
     || host.includes(`${SLD}.live`)
     || host.includes('stage.adobe')
     || host.includes('corp.adobe')
-    || host.includes('graybox.adobe')) {
+    || host.includes('graybox.adobe')
+    || host.includes('aem.reviews')) {
     return { ...ENVS.stage, consumer: conf.stage };
   }
   return { ...ENVS.prod, consumer: conf.prod };
@@ -201,11 +205,13 @@ export function getLocale(locales, pathname = window.location.pathname) {
   if ([LANGSTORE, PREVIEW].includes(localeString)) {
     const ietf = Object.keys(locales).find((loc) => locales[loc]?.ietf?.startsWith(split[2]));
     if (ietf) locale = locales[ietf];
-    locale.prefix = `/${localeString}/${split[2]}`;
+    const pathSegment = split[2] ? `/${split[2]}` : '';
+    locale.prefix = `/${localeString}${pathSegment}`;
     return locale;
   }
   const isUS = locale.ietf === 'en-US';
-  locale.prefix = isUS ? '' : `/${localeString}`;
+  const localePathPrefix = localeString ? `/${localeString}` : '';
+  locale.prefix = isUS ? '' : localePathPrefix;
   locale.region = isUS ? 'us' : localeString.split('_')[0];
   return locale;
 }
@@ -251,6 +257,8 @@ export function getMetadata(name, doc = document) {
   const meta = doc.head.querySelector(`meta[${attr}="${name}"]`);
   return meta && meta.content;
 }
+
+(() => { if (getMetadata('mweb') === 'on') document.body.classList.add('mweb-enabled'); })();
 
 const handleEntitlements = (() => {
   const { martech } = Object.fromEntries(PAGE_URL.searchParams);
@@ -382,7 +390,7 @@ export function hasLanguageLinks(area, paths = LANGUAGE_BASED_PATHS) {
 }
 
 export async function loadLanguageConfig() {
-  if (localeToLanguageMap && siteLanguages) return { siteLanguages, localeToLanguageMap };
+  if (langConfig) return langConfig;
 
   const parseList = (str) => str.split(/[\n,]+/).map((t) => t.trim()).filter(Boolean);
   try {
@@ -390,14 +398,17 @@ export async function loadLanguageConfig() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const configJson = await response.json();
 
-    localeToLanguageMap = configJson['locale-to-language-map']?.data;
-    siteLanguages = configJson['site-languages']?.data?.map((site) => ({
-      ...site,
-      pathMatches: parseList(site.pathMatches),
-      languages: parseList(site.languages),
-    }));
+    langConfig = {
+      localeToLanguageMap: configJson['locale-to-language-map']?.data,
+      siteLanguages: configJson['site-languages']?.data?.map((site) => ({
+        ...site,
+        pathMatches: parseList(site.pathMatches),
+        languages: parseList(site.languages),
+      })),
+      nativeToEnglishMapping: configJson['langmap-native-to-en']?.data || [],
+    };
 
-    return { siteLanguages, localeToLanguageMap };
+    return langConfig;
   } catch (e) {
     window.lana?.log('Failed to load language-config.json:', e);
   }
@@ -495,19 +506,19 @@ function getExtension(path) {
 
 function getPrefixBySite(locale, url, relative) {
   let { prefix } = locale;
-  const site = siteLanguages?.find((s) => s.pathMatches.some((d) => isPathMatch(d, url.href)));
-
-  const localeSiteWithLanguageTarget = !locale.language && site && localeToLanguageMap;
+  // eslint-disable-next-line max-len
+  const site = langConfig?.siteLanguages?.find((s) => s.pathMatches.some((d) => isPathMatch(d, url.href)));
+  const localeSiteWithLanguageTarget = !locale.language && site && langConfig?.localeToLanguageMap;
   const languageSiteWithLocaleTarget = locale.language && !relative && !site?.languages.some((l) => (l === DEFAULT_LANG ? '' : `/${l}`) === prefix);
   if (localeSiteWithLanguageTarget) {
-    const mappedLanguageFromPrefix = localeToLanguageMap?.find((m) => `${m.locale === '' ? '' : '/'}${m.locale}` === prefix);
+    const mappedLanguageFromPrefix = langConfig?.localeToLanguageMap?.find((m) => `${m.locale === '' ? '' : '/'}${m.locale}` === prefix);
     const languageInUseBySite = site.languages.find((l) => `${l}` === mappedLanguageFromPrefix.languagePath);
     if (languageInUseBySite) {
       prefix = languageInUseBySite === DEFAULT_LANG ? '' : `/${languageInUseBySite}`;
     }
   }
   if (languageSiteWithLocaleTarget) {
-    const mappedLocaleFromLanguage = localeToLanguageMap?.find((m) => `/${m.languagePath}` === prefix);
+    const mappedLocaleFromLanguage = langConfig?.localeToLanguageMap?.find((m) => `/${m.languagePath}` === prefix);
     prefix = mappedLocaleFromLanguage ? `${mappedLocaleFromLanguage.locale === '' ? '' : '/'}${mappedLocaleFromLanguage.locale}` : prefix;
   }
 
@@ -518,9 +529,9 @@ function isLocalizedPath(path, locales) {
   const langstorePath = path.startsWith(`/${LANGSTORE}`);
   const isMerchLink = path === '/tools/ost';
   const previewPath = path.startsWith(`/${PREVIEW}`);
-  const anyTypeOfLocaleOrLanguagePath = localeToLanguageMap
-    && (localeToLanguageMap.some((l) => l.locale !== '' && (path.startsWith(`/${l.locale}/`) || path === `/${l.locale}`))
-      || (localeToLanguageMap.some((l) => path.startsWith(`/${l.languagePath}/`) || path === `/${l.languagePath}`)));
+  const anyTypeOfLocaleOrLanguagePath = langConfig?.localeToLanguageMap
+    && (langConfig.localeToLanguageMap.some((l) => l.locale !== '' && (path.startsWith(`/${l.locale}/`) || path === `/${l.locale}`))
+      || (langConfig.localeToLanguageMap.some((l) => path.startsWith(`/${l.languagePath}/`) || path === `/${l.languagePath}`)));
   const legacyLocalePath = locales && Object.keys(locales).some((loc) => loc !== '' && (path.startsWith(`/${loc}/`)
     || path.endsWith(`/${loc}`)));
   return langstorePath
@@ -710,8 +721,27 @@ export async function loadTemplate() {
 
 function getBlockData(block) {
   const name = block.classList[0];
-  const { miloLibs, codeRoot, mep } = getConfig();
-  const base = miloLibs && MILO_BLOCKS.includes(name) ? miloLibs : codeRoot;
+  const { miloLibs, codeRoot, mep, externalLibs } = getConfig();
+
+  let base = codeRoot;
+  if (externalLibs) {
+    try {
+      const list = Array.isArray(externalLibs) ? externalLibs : [externalLibs];
+      const match = list.find((lib) => {
+        if (!lib || typeof lib !== 'object') return false;
+        if (!Array.isArray(lib.blocks)) return false;
+        if (!lib.base || typeof lib.base !== 'string') return false;
+
+        return lib.blocks.includes(name);
+      });
+      if (match?.base) base = match.base;
+    } catch (error) {
+      window.lana?.log(`Invalid externalLibs configuration: ${error.message || error}`);
+    }
+  }
+
+  if (miloLibs && MILO_BLOCKS.includes(name)) base = miloLibs;
+
   let path = `${base}/blocks/${name}`;
   if (mep?.blocks?.[name]) path = mep.blocks[name];
   const blockPath = `${path}/${name}`;
@@ -785,13 +815,18 @@ export function decorateSVG(a) {
   }
 }
 
+export const isValidHtmlUrl = (url) => {
+  const regex = /^https:\/\/[^\s]+$/;
+  return regex.test(url);
+};
+
 export function decorateImageLinks(el) {
   const images = el.querySelectorAll('img[alt*="|"]');
   if (!images.length) return;
   [...images].forEach((img) => {
     const [source, alt, icon] = img.alt.split('|');
     try {
-      if (!URL.canParse(source.trim())) return;
+      if (!isValidHtmlUrl(source.trim())) return;
       const url = new URL(source.trim());
       const href = (url.hostname.includes('.aem.') || url.hostname.includes('.hlx.')) ? `${url.pathname}${url.search}${url.hash}` : url.href;
       img.alt = alt?.trim() || '';
@@ -943,7 +978,9 @@ export function decorateLinks(el) {
   const links = [...anchors].reduce((rdx, a) => {
     appendHtmlToLink(a);
     if (a.href.includes('http:')) a.setAttribute('data-http-link', 'true');
-    a.href = localizeLink(a.href);
+    const hasDnt = a.href.includes('#_dnt');
+    if (!a.dataset?.hasDnt) a.href = localizeLink(a.href);
+    if (hasDnt) a.dataset.hasDnt = true;
     decorateSVG(a);
     if (a.href.includes('#_blank')) {
       a.setAttribute('target', '_blank');
@@ -1092,9 +1129,12 @@ async function decorateHeader() {
 async function decorateIcons(area, config) {
   const icons = area.querySelectorAll('span.icon');
   if (icons.length === 0) return;
-  const { base } = config;
+  const { base, iconsExcludeBlocks } = config;
+  if (iconsExcludeBlocks) {
+    const excludedIconsCount = [...icons].filter((icon) => iconsExcludeBlocks.some((block) => icon.closest(`div.${block}`))).length;
+    if (excludedIconsCount === icons.length) return;
+  }
   loadStyle(`${base}/features/icons/icons.css`);
-  loadLink(`${base}/img/icons/icons.svg`, { rel: 'preload', as: 'fetch', crossorigin: 'anonymous' });
   const { default: loadIcons } = await import('../features/icons/icons.js');
   await loadIcons(icons, config);
 }
@@ -1387,6 +1427,21 @@ export function enablePersonalizationV2() {
   return !!enablePersV2 && isSignedOut();
 }
 
+export function loadMepAddons() {
+  const mepAddons = ['lob', 'event-id'];
+  const promises = {};
+  mepAddons.forEach((addon) => {
+    const enablement = getMepEnablement(addon);
+    if (enablement === false) return;
+    const addonName = addon.split('-')[0];
+    promises[addonName] = (async () => {
+      const { default: init } = await import(`../features/mep/addons/${addonName}.js`);
+      return init(enablement);
+    })();
+  });
+  return promises;
+}
+
 async function checkForPageMods() {
   const {
     mep: mepParam,
@@ -1396,8 +1451,8 @@ async function checkForPageMods() {
   } = Object.fromEntries(PAGE_URL.searchParams);
   let targetInteractionPromise = null;
   let countryIPPromise = null;
-
   let calculatedTimeout = null;
+
   if (mepParam === 'off') return;
   const pzn = getMepEnablement('personalization');
   const pznroc = getMepEnablement('personalization-roc');
@@ -1406,17 +1461,18 @@ async function checkForPageMods() {
   const xlg = martech === 'off' ? false : getMepEnablement('xlg');
   const ajo = martech === 'off' ? false : getMepEnablement('ajo');
   const mepgeolocation = getMepEnablement('mepgeolocation');
+  const mepMarketingDecrease = getMepEnablement('mep-marketing-decrease');
 
   if (!(pzn || pznroc || target || promo || mepParam
-    || mepHighlight || mepButton || mepParam === '' || xlg || ajo)) return;
+    || mepHighlight || mepButton || mepParam === '' || xlg || ajo || mepMarketingDecrease)) return;
 
-  if (mepgeolocation) {
-    const urlParams = new URLSearchParams(window.location.search);
-    const akamaiCode = urlParams.get('akamaiLocale')?.toLowerCase() || sessionStorage.getItem('akamai');
-    if (!akamaiCode) {
-      const { getAkamaiCode } = await import('../features/georoutingv2/georoutingv2.js');
-      countryIPPromise = getAkamaiCode(true);
-    }
+  loadLink(`${getConfig().base}/martech/helpers.js`, { rel: 'preload', as: 'script', crossorigin: 'anonymous' });
+
+  const promises = loadMepAddons();
+  const akamaiCode = getMepEnablement('akamaiLocale') || sessionStorage.getItem('akamai');
+  if (mepgeolocation && !akamaiCode) {
+    const { getAkamaiCode } = await import('../features/georoutingv2/georoutingv2.js');
+    countryIPPromise = getAkamaiCode(true);
   }
   const enablePersV2 = enablePersonalizationV2();
   if ((target || xlg) && enablePersV2) {
@@ -1464,7 +1520,18 @@ async function checkForPageMods() {
     targetInteractionPromise,
     calculatedTimeout,
     enablePersV2,
+    promises,
+    mepMarketingDecrease,
+    akamaiCode,
   });
+}
+
+function setCountry() {
+  const country = window.performance?.getEntriesByType('navigation')?.[0]?.serverTiming
+    ?.find((timing) => timing?.name === 'geo')?.description?.toLowerCase();
+  if (!country) return;
+  sessionStorage.setItem('akamai', country);
+  sessionStorage.setItem('feds_location', JSON.stringify({ country: country.toUpperCase() }));
 }
 
 async function loadPostLCP(config) {
@@ -1506,7 +1573,7 @@ async function loadPostLCP(config) {
   }
   // load privacy here if quick-link is present in first section
   const quickLink = document.querySelector('div.section')?.querySelector('.quick-link');
-  if (!quickLink) return;
+  if (!quickLink || window.adobePrivacy) return;
   import('../scripts/delayed.js').then(({ loadPrivacy }) => {
     loadPrivacy(getConfig, loadScript);
   });
@@ -1573,7 +1640,9 @@ export async function loadDeferred(area, blocks, config) {
 function initSidekick() {
   const initPlugins = async () => {
     const { default: init } = await import('./sidekick.js');
+    const { getPreflightResults } = await import('../blocks/preflight/checks/preflightApi.js');
     init({ createTag, loadBlock, loadScript, loadStyle });
+    getPreflightResults(window.location.href, document);
   };
 
   if (document.querySelector('aem-sidekick, helix-sidekick')) {
@@ -1587,7 +1656,7 @@ function initSidekick() {
 
 function decorateMeta() {
   const { origin } = window.location;
-  const contents = document.head.querySelectorAll('[content*=".hlx."], [content*=".aem."]');
+  const contents = document.head.querySelectorAll('[content*=".hlx."], [content*=".aem."], [content*="/federal/"]');
   contents.forEach((meta) => {
     if (meta.getAttribute('property') === 'hlx:proxyUrl' || meta.getAttribute('name')?.endsWith('schedule')) return;
     try {
@@ -1713,12 +1782,13 @@ export async function loadArea(area = document) {
   const isDoc = area === document;
   if (isDoc) {
     if (document.getElementById('page-load-ok-milo')) return;
+    setCountry();
     await checkForPageMods();
     appendHtmlToCanonicalUrl();
     appendSuffixToTitles();
   }
   const config = getConfig();
-  if (!localeToLanguageMap && !siteLanguages && (config.languages || hasLanguageLinks(area))) {
+  if (!langConfig && (config.languages || hasLanguageLinks(area))) {
     await loadLanguageConfig();
   }
 

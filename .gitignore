@@ -15,5 +15,6 @@ tmp
 libs/navigation/dist/
 *.mdc
 /.cursor*/
-.cursor\ 2/
-/.cursor 2
+/.claude/
+CLAUDE.md
+**/.CLAUDE.md

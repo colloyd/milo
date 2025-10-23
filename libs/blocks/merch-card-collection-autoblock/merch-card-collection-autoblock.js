@@ -1,32 +1,58 @@
 import { createTag, getConfig } from '../../utils/utils.js';
-import { initService, getOptions, MEP_SELECTOR, overrideOptions } from '../merch/merch.js';
-import { postProcessAutoblock } from '../merch/autoblock.js';
+import { postProcessAutoblock, handleCustomAnalyticsEvent } from '../merch/autoblock.js';
 import '../../deps/mas/merch-card.js';
 import '../../deps/mas/merch-quantity-select.js';
+import {
+  initService,
+  getOptions,
+  MEP_SELECTOR,
+  overrideOptions,
+  updateModalState,
+  loadLitDependency,
+  loadMasComponent,
+  MAS_MERCH_CARD,
+  MAS_MERCH_QUANTITY_SELECT,
+  MAS_MERCH_CARD_COLLECTION,
+  MAS_MERCH_SIDENAV,
+} from '../merch/merch.js';
 
-const COLLECTION_AUTOBLOCK_TIMEOUT = 5000;
+const DEPS_TIMEOUT = 10000;
 const DEFAULT_OPTIONS = { sidenav: true };
-let log;
 
-function getTimeoutPromise() {
+// Map of single_app values to their corresponding filter values
+const SINGLE_APP_FILTER_MAP = {
+  illustrator: 'illustration',
+  indesign: 'design',
+  animate: 'video-audio',
+  premiere: 'video-audio',
+  aftereffects: 'video-audio',
+  audition: 'video-audio',
+  incopy: 'design',
+  lightroom_1tb: 'photography',
+};
+
+function getTimeoutPromise(timeout) {
   return new Promise((resolve) => {
-    setTimeout(() => resolve(false), COLLECTION_AUTOBLOCK_TIMEOUT);
+    setTimeout(() => resolve(false), timeout);
   });
 }
 
 async function loadDependencies(options) {
-  /** Load service first */
+  /** Load lit first as it's needed by MAS components */
+  await loadLitDependency();
+
+  /** Load service */
   const servicePromise = initService();
-  const success = await Promise.race([servicePromise, getTimeoutPromise()]);
+  const success = await Promise.race([servicePromise, getTimeoutPromise(DEPS_TIMEOUT)]);
   if (!success) {
     throw new Error('Failed to initialize mas commerce service');
   }
-  const service = await servicePromise;
-  log = service.Log.module('merch');
 
   const { base } = getConfig();
   const dependencyPromises = [
-    import('../../deps/mas/merch-card-collection.js'),
+    loadMasComponent(MAS_MERCH_CARD),
+    loadMasComponent(MAS_MERCH_QUANTITY_SELECT),
+    loadMasComponent(MAS_MERCH_CARD_COLLECTION),
     import(`${base}/features/spectrum-web-components/dist/theme.js`),
     import(`${base}/features/spectrum-web-components/dist/button.js`),
     import(`${base}/features/spectrum-web-components/dist/action-button.js`),
@@ -38,7 +64,7 @@ async function loadDependencies(options) {
   ];
   if (options.sidenav) {
     dependencyPromises.push(...[
-      import('../../deps/mas/merch-sidenav.js'),
+      loadMasComponent(MAS_MERCH_SIDENAV),
       import(`${base}/features/spectrum-web-components/dist/base.js`),
       import(`${base}/features/spectrum-web-components/dist/shared.js`),
       import(`${base}/features/spectrum-web-components/dist/sidenav.js`),
@@ -48,6 +74,18 @@ async function loadDependencies(options) {
     ]);
   }
   await Promise.all(dependencyPromises);
+}
+
+function localizeIconPath(iconPath) {
+  if (window.location.hostname.endsWith('.adobe.com') && iconPath?.match(/http[s]?:\/\/\S*\.(hlx|aem).(page|live)\//)) {
+    try {
+      const url = new URL(iconPath);
+      return `https://www.adobe.com${url.pathname}`;
+    } catch (e) {
+      window.lana?.log(`Invalid URL - ${iconPath}: ${e.toString()}`);
+    }
+  }
+  return iconPath;
 }
 
 function getSidenav(collection) {
@@ -72,20 +110,29 @@ function getSidenav(collection) {
   spSidenav.setAttribute('manageTabIndex', true);
   const sidenavList = createTag('merch-sidenav-list', { deeplink: 'filter' }, spSidenav);
 
+  sidenavList.updateComplete.then(() => {
+    sidenavList.querySelector('sp-sidenav')?.setAttribute('role', 'tablist');
+    sidenavList.querySelectorAll('sp-sidenav-item').forEach((item) => {
+      item.removeAttribute('role');
+      item.shadowRoot?.querySelector('a')?.setAttribute('role', 'tab');
+    });
+  });
+
   let multilevel = false;
   function generateLevelItems(level, parent) {
     for (const node of level) {
-      const value = node.label.toLowerCase();
+      const value = node.queryLabel || node.label.toLowerCase();
       const item = createTag('sp-sidenav-item', { label: node.label, value });
-      if (node.icon) {
-        createTag('img', { src: node.icon, slot: 'icon', style: 'height: fit-content;' }, null, { parent: item });
+      const iconPath = localizeIconPath(node.icon);
+      if (iconPath) {
+        createTag('img', { src: iconPath, slot: 'icon', alt: '' }, null, { parent: item });
       }
       if (node.iconLight || node.navigationLabel) {
         const attributes = { class: 'selection' };
         if (node.navigationLabel) attributes['data-selected-text'] = node.navigationLabel;
         if (node.iconLight) {
-          attributes['data-light'] = node.iconLight;
-          attributes['data-dark'] = node.icon;
+          attributes['data-light'] = localizeIconPath(node.iconLight);
+          attributes['data-dark'] = iconPath;
         }
         createTag('var', attributes, null, { parent: item });
       }
@@ -105,14 +152,26 @@ function getSidenav(collection) {
   return sidenav;
 }
 
-export async function checkReady(masElement) {
-  const readyPromise = masElement.checkReady();
-  const success = await Promise.race([readyPromise, getTimeoutPromise()]);
-
-  if (!success) {
-    log.error(`${masElement.tagName} did not initialize withing give timeout`);
-  }
+function enableSidenavAnalytics(el) {
+  el.sidenav?.addEventListener('merch-sidenav:select', ({ target }) => {
+    if (!target || target.oldValue === target.selectedValue) return;
+    const container = target.closest('.collection-container');
+    const updated = container.getAttribute('daa-lh')?.includes('--cat');
+    container?.setAttribute('daa-lh', `${target.selectedValue}--cat`);
+    if (updated) {
+      handleCustomAnalyticsEvent('cat-changed', target);
+    }
+    target.oldValue = target.selectedValue;
+  });
 }
+
+export const enableModalOpeningOnPageLoad = () => {
+  window.addEventListener('mas:ready', ({ target }) => {
+    target.querySelectorAll('[is="checkout-link"][data-modal-id]').forEach((cta) => {
+      if (!cta.closest('.tabpanel[hidden]')) updateModalState({ cta });
+    });
+  });
+};
 
 export async function createCollection(el, options) {
   const aemFragment = createTag('aem-fragment', { fragment: options.fragment });
@@ -128,40 +187,48 @@ export async function createCollection(el, options) {
     attributes = { overrides };
   }
   const collection = createTag('merch-card-collection', attributes, aemFragment);
-  let container = collection;
-  if (options.sidenav) {
-    container = createTag('div', null, collection);
-  }
-  el.replaceWith(container);
-  await checkReady(collection);
+  const container = createTag('div', null, collection);
+  let toReplace = el;
+  const contentParent = el.closest('.content');
+  const paragraph = contentParent?.querySelector(':scope > p');
+  if (paragraph) toReplace = paragraph;
+  toReplace.replaceWith(container);
 
-  container.classList.add(`${collection.variant}-container`);
-
-  /* Placeholders */
-  const placeholders = collection.data?.placeholders || {};
-  for (const key of Object.keys(placeholders)) {
-    const value = placeholders[key];
-    const tag = value.includes('<p>') ? 'div' : 'p';
-    const placeholder = createTag(tag, { slot: key }, value);
-    collection.append(placeholder);
+  const success = await collection.checkReady();
+  if (!success) {
+    const { env } = getConfig();
+    if (env.name !== 'prod') {
+      collection.prepend(createTag('div', { }, 'Failed to load. Please check your VPN connection.'));
+    }
   }
+  container.classList.add('collection-container', collection.variant);
 
   /* Sidenav */
   if (options.sidenav) {
+    // Set filter based on single_app parameter if filter doesn't exist
+    const urlParams = new URLSearchParams(window.location.search);
+    const singleApp = urlParams.get('single_app');
+    if (singleApp && !urlParams.get('filter') && SINGLE_APP_FILTER_MAP[singleApp]) {
+      urlParams.set('filter', SINGLE_APP_FILTER_MAP[singleApp]);
+      const newUrl = `${window.location.pathname}?${urlParams.toString()}${window.location.hash}`;
+      window.history.pushState({}, '', newUrl);
+    }
     const sidenav = getSidenav(collection);
     if (sidenav) {
-      container.insertBefore(sidenav, collection);
-      collection.sidenav = sidenav;
+      collection.attachSidenav(sidenav);
     }
   }
 
-  postProcessAutoblock(collection);
+  await postProcessAutoblock(collection, false);
   collection.requestUpdate();
+  // card analytics is enabled in postProcessAutoblock
+  enableSidenavAnalytics(collection);
 }
 
 export default async function init(el) {
   let options = { ...DEFAULT_OPTIONS, ...getOptions(el) };
   if (!options.fragment) return;
+  enableModalOpeningOnPageLoad();
   options = overrideOptions(options.fragment, options);
   await loadDependencies(options);
   await createCollection(el, options);

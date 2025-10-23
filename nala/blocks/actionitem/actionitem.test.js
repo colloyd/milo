@@ -155,12 +155,27 @@ test.describe('Milo Action-Item block test suite', () => {
       await expect(await actionItem.floatOutlineButton).toContainText(data.floatButtonText);
     });
 
-    await test.step('step-4: Verify the accessibility test on the Action-Item (Float Button) block', async () => {
+    await test.step('step-3: Verify the accessibility test on the Action-Item (Float Button) block', async () => {
       await runAccessibilityTest({ page, testScope: actionItem.actionItemFloat });
     });
-    await test.step('step-3: Click the float button', async () => {
+
+    await test.step('step-4: Click the float button', async () => {
+      const pagesBefore = page.context().pages();
+
       await actionItem.floatButton.click();
-      expect(await page.url()).not.toBe(testPage);
+
+      await page.waitForTimeout(1000);
+
+      const pagesAfter = page.context().pages();
+      let targetPage;
+
+      if (pagesAfter.length > pagesBefore.length) {
+        targetPage = pagesAfter[pagesAfter.length - 1];
+      } else {
+        targetPage = page;
+      }
+      await targetPage.waitForLoadState('domcontentloaded', { timeout: 30000 });
+      await expect(targetPage).not.toHaveURL(testPage);
     });
   });
 

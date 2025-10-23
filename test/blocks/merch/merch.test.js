@@ -1,5 +1,4 @@
 import { expect } from '@esm-bundle/chai';
-import sinon from 'sinon';
 import { delay } from '../../helpers/waitfor.js';
 
 import { CheckoutWorkflowStep, Defaults, Log } from '../../../libs/deps/mas/commerce.js';
@@ -22,14 +21,17 @@ import merch, {
   getMasBase,
   getOptions,
   appendDexterParameters,
+  getLocaleSettings,
   getMiloLocaleSettings,
-  reopenModal,
-  resetReopenStatus,
   setCtaHash,
   openModal,
   PRICE_TEMPLATE_LEGAL,
+  modalState,
+  updateModalState,
+  isFallbackStepUsed,
+  getWorkflowStep,
 } from '../../../libs/blocks/merch/merch.js';
-import { localizePreviewLinks } from '../../../libs/blocks/merch/autoblock.js';
+import { decorateCardCtasWithA11y, localizePreviewLinks } from '../../../libs/blocks/merch/autoblock.js';
 
 import { mockFetch, unmockFetch, readMockText } from './mocks/fetch.js';
 import { mockIms, unmockIms } from './mocks/ims.js';
@@ -86,6 +88,14 @@ const CHECKOUT_LINK_CONFIGS = {
     BUY_NOW_PATH: 'www.adobe.com/will/not/be/localized.html',
     LOCALE: '',
   },
+  {
+    PRODUCT_FAMILY: 'ILLUSTRATOR+abc',
+    DOWNLOAD_TEXT: 'Download',
+    DOWNLOAD_URL: 'https://creativecloud.adobe.com/apps/download/illustrator',
+    FREE_TRIAL_PATH: 'https://www.adobe.com/mini-plans/illustrator_abc.html?mid=ft&web=1',
+    BUY_NOW_PATH: 'https://www.adobe.com/buy/mini-plans/illustrator_abc.html?mid=ft&web=1',
+    LOCALE: '',
+  },
   ],
 };
 
@@ -127,7 +137,7 @@ const validatePriceSpan = async (selector, expectedAttributes) => {
 const SUBSCRIPTION_DATA_ALL_APPS_RAW_ELIGIBLE = [
   {
     change_plan_available: true,
-    offer: { product_arrangement: { family: 'CC_ALL_APPS' } },
+    offer: { product_arrangement_v2: { family: 'CC_ALL_APPS' } },
   },
 ];
 
@@ -136,7 +146,7 @@ const SUBSCRIPTION_DATA_PHSP_RAW_ELIGIBLE = [
     change_plan_available: true,
     offer: {
       offer_id: '5F2E4A8FD58D70C8860F51A4DE042E0C',
-      product_arrangement: { family: 'PHOTOSHOP' },
+      product_arrangement_v2: { family: 'PHOTOSHOP' },
     },
   },
 ];
@@ -153,6 +163,13 @@ const createCtaInMerchCard = () => {
   const el = document.createElement('a');
   merchCard.appendChild(el);
   return el;
+};
+
+const disable3in1 = () => {
+  const meta = document.createElement('meta');
+  meta.setAttribute('name', 'mas-ff-3in1');
+  meta.setAttribute('content', 'off');
+  document.querySelector('head').appendChild(meta);
 };
 
 describe('Merch Block', () => {
@@ -218,6 +235,38 @@ describe('Merch Block', () => {
         const computedLocale = getMiloLocaleSettings({ prefix })?.locale;
         expect(computedLocale).to.equal(expectedLocale);
       });
+    });
+
+    it('should use geo locale for lang-first sites', async () => {
+      sessionStorage.setItem('akamai', 'ES');
+      const geoDetectionMeta = document.createElement('meta');
+      geoDetectionMeta.setAttribute('name', 'mas-geo-detection');
+      geoDetectionMeta.setAttribute('content', 'on');
+      document.head.append(geoDetectionMeta);
+      const data = [
+        { prefix: '/ar', expectedLocale: 'es_AR', expectedCountry: 'ES' },
+        { prefix: '/africa', expectedLocale: 'en_MU', expectedCountry: 'ES' },
+        { prefix: '', expectedLocale: 'en_US', expectedCountry: 'ES' },
+        { prefix: '/ae_ar', expectedLocale: 'ar_AE', expectedCountry: 'ES' },
+        { prefix: '/langstore/en', expectedLocale: 'en_US', expectedCountry: 'ES' },
+        { prefix: '/langstore/es', expectedLocale: 'es_ES', expectedCountry: 'ES' },
+        { prefix: '/langstore/de', expectedLocale: 'de_DE', expectedCountry: 'ES' },
+        { prefix: '/langstore/id', expectedLocale: 'id_ID', expectedCountry: 'ES' },
+        { prefix: '/langstore/hi', expectedLocale: 'hi_IN', expectedCountry: 'ES' },
+        { prefix: '/langstore/ar', expectedLocale: 'ar_DZ', expectedCountry: 'ES' },
+        { prefix: '/langstore/nb', expectedLocale: 'nb_NO', expectedCountry: 'ES' },
+        { prefix: '/langstore/zh-hant', expectedLocale: 'zh-hant_TW', expectedCountry: 'ES' },
+        { prefix: '/langstore/el', expectedLocale: 'el_GR', expectedCountry: 'ES' },
+        { prefix: '/langstore/uk', expectedLocale: 'uk_UA', expectedCountry: 'ES' },
+        { prefix: '/langstore/es-419', expectedLocale: 'es-419_ES', expectedCountry: 'ES' },
+      ];
+      for (const { prefix, expectedLocale, expectedCountry } of data) {
+        const settings = await getLocaleSettings({ prefix });
+        expect(settings?.locale).to.equal(expectedLocale);
+        expect(settings?.country).to.equal(expectedCountry);
+      }
+      sessionStorage.removeItem('akamai');
+      geoDetectionMeta.remove();
     });
   });
 
@@ -317,7 +366,24 @@ describe('Merch Block', () => {
   describe('Prices: legal template', () => {
     it('renders merch link with legal template', async () => {
       const el = await validatePriceSpan('.merch.price.legal', { template: PRICE_TEMPLATE_LEGAL });
-      expect(el.textContent).to.equal('per license (Annual, paid monthly.)');
+      expect(el.textContent).to.equal('per licenseAnnual, billed monthly');
+    });
+  });
+
+  describe('CTAs A11Y', () => {
+    it('decorate card ctas with aria label', async () => {
+      const cards = document.querySelectorAll('.cards merch-card');
+      cards.forEach(async (card) => {
+        const el = await merch(card.querySelector('.merch.cta'));
+        await el?.onceSettled();
+        card.checkReady = () => Promise.resolve(true);
+        decorateCardCtasWithA11y(card, true);
+      });
+      await delay(100);
+      expect(cards[0].querySelector('a').getAttribute('aria-label')).to.equal('CTA1 Buy Now - PHSP - INDIVIDUAL');
+      expect(cards[1].querySelector('a').getAttribute('aria-label')).to.equal('CTA2 Buy Now - PHSP - INDIVIDUAL');
+      expect(cards[2].querySelector('a').getAttribute('aria-label')).to.equal('CTA3 Buy Now - Product three');
+      expect(cards[3].querySelector('a').getAttribute('aria-label')).to.equal('CTA4 Buy Now');
     });
   });
 
@@ -465,6 +531,43 @@ describe('Merch Block', () => {
       const { classList } = await el.onceSettled();
       expect(classList.contains('button-l')).to.be.true;
     });
+
+    it('extracts and applies a custom button fill class from URL hash', async () => {
+      const el = await merch(document.querySelector(
+        '.merch.cta.fill',
+      ));
+      const { classList } = await el.onceSettled();
+      expect(classList.contains('fill')).to.be.true;
+      expect(classList.contains('con-button')).to.be.true;
+    });
+
+    it('handles hyphenated custom button classes correctly', async () => {
+      const el = await merch(document.querySelector(
+        '.merch.cta.custom-hyphenated',
+      ));
+      const { classList } = await el.onceSettled();
+      expect(classList.contains('my-custom-style')).to.be.true;
+      expect(classList.contains('con-button')).to.be.true;
+    });
+
+    it('ignores invalid custom button class format', async () => {
+      const el = await merch(document.querySelector(
+        '.merch.cta.custom-invalid',
+      ));
+      const { classList } = await el.onceSettled();
+      expect(classList.contains('123invalid')).to.be.false;
+      expect(classList.contains('con-button')).to.be.true;
+    });
+
+    it('does not apply unexpected custom classes when no custom hash parameter exist', async () => {
+      const el = await merch(document.querySelector(
+        '.merch.cta.primary',
+      ));
+      const { classList } = await el.onceSettled();
+      expect(classList.contains('fill')).to.be.false;
+
+      expect(classList.contains('con-button')).to.be.true;
+    });
   });
 
   describe('function "getCheckoutContext"', () => {
@@ -482,76 +585,32 @@ describe('Merch Block', () => {
       expect(await buildCta(el, params)).to.be.null;
     });
 
-    describe('reopenModal', () => {
-      it('clicks the CTA if hashes match', async () => {
-        const prevHash = window.location.hash;
-        window.location.hash = '#try-photoshop';
-        const cta = document.createElement('a');
-        cta.setAttribute('data-modal-id', 'try-photoshop');
-        const clickSpy = sinon.spy(cta, 'click');
-        reopenModal(cta);
-        expect(clickSpy.called).to.be.true;
-        window.location.hash = prevHash;
-        resetReopenStatus();
-      });
-
-      it('only reopens one modal if multiples hashes match', async () => {
-        const prevHash = window.location.hash;
-        window.location.hash = '#try-photoshop';
-
-        const cta1 = document.createElement('a');
-        cta1.setAttribute('data-modal-id', 'try-photoshop');
-        const clickSpy1 = sinon.spy(cta1, 'click');
-
-        const cta2 = document.createElement('a');
-        cta1.setAttribute('data-modal-id', 'try-photoshop');
-        const clickSpy2 = sinon.spy(cta2, 'click');
-
-        reopenModal(cta1);
-        reopenModal(cta2);
-
-        expect(clickSpy1.called).to.be.true;
-        expect(clickSpy2.called).to.be.false;
-
-        window.location.hash = prevHash;
-        resetReopenStatus();
-      });
+    it('returns cta node with the correct custom class name', async () => {
+      const el = document.createElement('a');
+      el.setAttribute('href', '/tools/ost?osi=29&type=checkoutUrl#_button-fill');
+      const params = new URLSearchParams({ osi: '123' });
+      const result = await buildCta(el, params);
+      expect(result).to.not.be.null;
+      expect(result.classList.contains('fill')).to.be.true;
     });
 
-    describe('openModal', () => {
-      it('sets the new hash and event listener to restore the hash on close', async () => {
-        const prevHash = window.location.hash;
-        await openModal(new CustomEvent('test'), 'https://www.adobe.com/mini-plans/creativecloud.html?mid=ft&web=1', 'TRIAL', 'try-photoshop');
-        expect(window.location.hash).to.equal('#try-photoshop');
-        const modalCloseEvent = new CustomEvent('milo:modal:closed');
-        window.dispatchEvent(modalCloseEvent);
-        expect(window.location.hash).to.equal(prevHash);
-        document.body.querySelector('.dialog-modal').remove();
-        window.location.hash = prevHash;
-      });
+    it('returns cta node ignoring invalid hash format', async () => {
+      const el = document.createElement('a');
+      el.setAttribute('href', '/tools/ost?osi=29&type=checkoutUrl#_button-123fill');
+      const params = new URLSearchParams({ osi: '123' });
+      const result = await buildCta(el, params);
+      expect(result).to.not.be.null;
+      expect(result.classList.contains('123fill')).not.to.be.true;
+    });
 
-      it('opens the 3-in-1 modal', async () => {
-        const checkoutLink = document.createElement('a');
-        checkoutLink.setAttribute('is', 'checkout-link');
-        checkoutLink.setAttribute('data-checkout-workflow', 'UCv3');
-        checkoutLink.setAttribute('data-checkout-workflow-step', 'segmentation');
-        checkoutLink.setAttribute('data-modal', 'true');
-        checkoutLink.setAttribute('data-quantity', '1');
-        checkoutLink.setAttribute('data-wcs-osi', 'L2C9cKHNNDaFtBVB6GVsyNI88RlyimSlzVfkMM2gH4A');
-        checkoutLink.setAttribute('data-extra-options', '{}');
-        checkoutLink.setAttribute('class', 'con-button placeholder-resolved');
-        checkoutLink.setAttribute('href', 'https://commerce.adobe.com/store/segmentation?ms=COM&ot=TRIAL&pa=phsp_direct_individual&cli=adobe_com&ctx=if&co=US&lang=en');
-        checkoutLink.setAttribute('daa-ll', 'Free trial-1--');
-        checkoutLink.setAttribute('data-modal-id', 'mini-plans-web-cta-photoshop-card');
-        checkoutLink.setAttribute('data-modal-type', 'twp');
-        Object.defineProperty(checkoutLink, 'isOpen3in1Modal', { get: () => true });
-        await openModal(new CustomEvent('test'), 'https://www.adobe.com/mini-plans/creativecloud.html?mid=ft&web=1', 'TRIAL', 'try-photoshop', {}, checkoutLink);
-        const threeInOneModal = document.querySelector('.dialog-modal.three-in-one');
-        expect(threeInOneModal).to.exist;
-        const iFrame = document.querySelector('.dialog-modal.three-in-one iframe');
-        expect(iFrame.src).to.equal('https://commerce.adobe.com/store/segmentation?ms=COM&ot=TRIAL&pa=phsp_direct_individual&cli=adobe_com&ctx=if&co=US&lang=en');
-        threeInOneModal.remove();
-      });
+    it('returns cta node without unexpected custom class', async () => {
+      const el = document.createElement('a');
+      el.setAttribute('href', '/tools/ost?osi=29&type=checkoutUrl');
+      const params = new URLSearchParams({ osi: '123' });
+      const result = await buildCta(el, params);
+      expect(result).to.not.be.null;
+      expect(result.classList.contains('fill')).not.to.be.true;
+      expect(result.classList.contains('con-button')).to.be.true;
     });
   });
 
@@ -564,7 +623,7 @@ describe('Merch Block', () => {
       await initService(true);
       const cta1 = await merch(document.querySelector('.merch.cta.download'));
       await cta1.onceSettled();
-      const [{ DOWNLOAD_URL }] = CHECKOUT_LINK_CONFIGS.data;
+      const { DOWNLOAD_URL } = CHECKOUT_LINK_CONFIGS.data[1];
       expect(cta1.textContent).to.equal('Download');
       expect(cta1.href).to.equal(DOWNLOAD_URL);
 
@@ -589,7 +648,7 @@ describe('Merch Block', () => {
       await initService(true);
       const cta = await merch(document.querySelector('.merch.cta.download.fr'));
       await cta.onceSettled();
-      const [,, { DOWNLOAD_URL }] = CHECKOUT_LINK_CONFIGS.data;
+      const { DOWNLOAD_URL } = CHECKOUT_LINK_CONFIGS.data[3];
       expect(cta.textContent).to.equal(newConfig.placeholders.download);
       expect(cta.href).to.equal(DOWNLOAD_URL);
     });
@@ -660,6 +719,44 @@ describe('Merch Block', () => {
     });
   });
 
+  describe('openModal', () => {
+    it('sets the new hash when it is passed as argument', async () => {
+      modalState.isOpen = false;
+      const prevHash = window.location.hash;
+      await openModal(new CustomEvent('test'), 'https://www.adobe.com/mini-plans/creativecloud.html?mid=ft&web=1', 'TRIAL', 'mini-plans-web-cta-creative-cloud-card');
+      expect(window.location.hash).to.equal('#mini-plans-web-cta-creative-cloud-card');
+      window.location.hash = prevHash;
+      modalState.isOpen = false;
+    });
+
+    it('opens the 3-in-1 modal', async () => {
+      const prevHash = window.location.hash;
+      modalState.isOpen = false;
+      const checkoutLink = document.createElement('a');
+      checkoutLink.setAttribute('is', 'checkout-link');
+      checkoutLink.setAttribute('data-checkout-workflow-step', 'segmentation');
+      checkoutLink.setAttribute('data-modal', 'crm');
+      checkoutLink.setAttribute('data-quantity', '1');
+      checkoutLink.setAttribute('data-wcs-osi', 'JzW8dgW8U1SrgbHDmTE-ABsOKPgtl5jugiW8bA5PtKg');
+      checkoutLink.setAttribute('data-extra-options', '{"rf":"uc_segmentation_hide_tabs_cr"}');
+      checkoutLink.setAttribute('class', 'con-button placeholder-resolved');
+      checkoutLink.setAttribute('href', 'https://commerce.adobe.com/store/segmentation?cli=creative&ctx=if&co=US&rf=uc_segmentation_hide_tabs_cr&lang=en&ms=COM&ot=TRIAL&cs=INDIVIDUAL&pa=ccsn_direct_individual&rtc=t&lo=sl&af=uc_new_user_iframe%2Cuc_new_system_close');
+      checkoutLink.setAttribute('daa-ll', 'Free trial-5--creative-cloud');
+      checkoutLink.setAttribute('data-modal-id', 'mini-plans-web-cta-creative-cloud-card');
+      Object.defineProperty(checkoutLink, 'isOpen3in1Modal', { get: () => true });
+
+      await openModal(new CustomEvent('test'), 'https://www.adobe.com/mini-plans/creativecloud.html?mid=ft&web=1', 'TRIAL', 'mini-plans-web-cta-creative-cloud-card', { rf: 'uc_segmentation_hide_tabs_cr' }, checkoutLink);
+
+      const threeInOneModal = document.querySelector('.dialog-modal.three-in-one');
+      expect(threeInOneModal).to.exist;
+      const iFrame = document.querySelector('.dialog-modal.three-in-one iframe');
+      expect(iFrame.src).to.equal('https://commerce.adobe.com/store/segmentation?cli=creative&ctx=if&co=US&rf=uc_segmentation_hide_tabs_cr&lang=en&ms=COM&ot=TRIAL&cs=INDIVIDUAL&pa=ccsn_direct_individual&rtc=t&lo=sl&af=uc_new_user_iframe%2Cuc_new_system_close');
+      threeInOneModal.remove();
+      window.location.hash = prevHash;
+      modalState.isOpen = false;
+    });
+  });
+
   describe('Modal flow', () => {
     it('renders TWP modal', async () => {
       mockIms();
@@ -714,6 +811,20 @@ describe('Merch Block', () => {
       expect(checkoutLinkConfig.DOWNLOAD_TEXT).to.equal('paCode');
       checkoutLinkConfig = await getCheckoutLinkConfig('', '', 'testPaCode');
       expect(checkoutLinkConfig.DOWNLOAD_TEXT).to.equal('paCode');
+    });
+
+    it('getCheckoutLinkConfig: finds using paCode and svar', async () => {
+      const options = { extraOptions: '{"svar": "abc", "other": "xyz"}' };
+      const checkoutLinkConfig = await getCheckoutLinkConfig(undefined, undefined, 'ILLUSTRATOR', options);
+      expect(checkoutLinkConfig.FREE_TRIAL_PATH).to.equal('https://www.adobe.com/mini-plans/illustrator_abc.html?mid=ft&web=1');
+      expect(checkoutLinkConfig.BUY_NOW_PATH).to.equal('https://www.adobe.com/buy/mini-plans/illustrator_abc.html?mid=ft&web=1');
+    });
+
+    it('getCheckoutLinkConfig: finds using paCode and no svar', async () => {
+      const options = { extraOptions: '{"other": "xyz"}' };
+      const checkoutLinkConfig = await getCheckoutLinkConfig(undefined, undefined, 'ILLUSTRATOR', options);
+      expect(checkoutLinkConfig.FREE_TRIAL_PATH).to.equal('https://www.adobe.com/mini-plans/illustrator.html?mid=ft&web=1');
+      expect(checkoutLinkConfig.BUY_NOW_PATH).to.equal('https://www.adobe.com/plans-fragments/modals/individual/modals-content-rich/illustrator/master.modal.html');
     });
 
     it('getCheckoutLinkConfig: finds using productCode', async () => {
@@ -883,6 +994,47 @@ describe('Merch Block', () => {
     });
   });
 
+  describe('updateModalState', () => {
+    const prevHash = window.location.hash;
+
+    afterEach(() => {
+      modalState.isOpen = false;
+      document.querySelector('.dialog-modal')?.remove();
+      window.location.hash = prevHash;
+    });
+
+    it('closes the modal on back navigation on catalog page when filters were selected', async () => {
+      modalState.isOpen = false;
+      const modal = document.createElement('div');
+      modal.classList.add('dialog-modal');
+      modal.id = 'mini-plans-web-cta-creative-cloud-card';
+      document.body.appendChild(modal);
+      window.location.hash = '#category=photo&types=desktop';
+      modalState.isOpen = true;
+      const isModalOpen = await updateModalState();
+      expect(isModalOpen).to.be.false;
+    });
+
+    it('reflects the state when the modal gets closed by user click', async () => {
+      const modal = document.createElement('div');
+      modal.classList.add('dialog-modal');
+      modal.id = 'mini-plans-web-cta-creative-cloud-card';
+      document.body.appendChild(modal);
+      const isModalOpen = await updateModalState({ closedByUser: true });
+      expect(isModalOpen).to.be.false;
+    });
+
+    it('closes the modal when the hash was removed from the URL', async () => {
+      window.location.hash = '';
+      const modal = document.createElement('div');
+      modal.id = 'mini-plans-web-cta-creative-cloud-card';
+      modal.classList.add('dialog-modal');
+      document.body.appendChild(modal);
+      const isModalOpen = await updateModalState();
+      expect(isModalOpen).to.be.false;
+    });
+  });
+
   describe('locale settings', () => {
     it('should map correct commerce locale', async () => {
       [
@@ -943,6 +1095,94 @@ describe('Merch Block', () => {
       expect(div.querySelector('.link1').getAttribute('href')).to.equal('/test/milo/path');
       expect(div.querySelector('.link2').getAttribute('href')).to.equal('/test/cc/path');
       expect(div.querySelector('.link3').getAttribute('href')).to.equal('https://mas.adobe.com/studio.html#content-type=merch-card-collection&path=acom');
+    });
+  });
+
+  describe('isFallbackStepUsed', () => {
+    it('returns true if modal is 3-in-1, fallbackStep is provided and 3-in-1 is disabled', () => {
+      disable3in1();
+      expect(isFallbackStepUsed({
+        modal: 'twp',
+        fallbackStep: 'commitment',
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        checkoutClientId: 'doc_cloud',
+      })).to.be.true;
+      expect(isFallbackStepUsed({
+        modal: 'd2p',
+        fallbackStep: 'commitment',
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        checkoutClientId: 'doc_cloud',
+      })).to.be.true;
+      expect(isFallbackStepUsed({
+        modal: 'crm',
+        fallbackStep: 'commitment',
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        checkoutClientId: 'doc_cloud',
+      })).to.be.true;
+      document.querySelector('meta[name="mas-ff-3in1"]').remove();
+    });
+
+    it('returns false if 3-in-1 is enabled', () => {
+      expect(isFallbackStepUsed({
+        modal: 'crm',
+        fallbackStep: 'commitment',
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        checkoutClientId: 'adobe_com',
+      })).to.be.false;
+    });
+
+    it('returns false if modal is not 3-in-1', () => {
+      expect(isFallbackStepUsed({
+        modal: undefined,
+        fallbackStep: 'commitment',
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        checkoutClientId: 'doc_cloud',
+      })).to.be.false;
+      expect(isFallbackStepUsed({
+        modal: 'typo',
+        fallbackStep: 'commitment',
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        checkoutClientId: 'doc_cloud',
+      })).to.be.false;
+    });
+  });
+
+  describe('getWorkflowStep', () => {
+    it('returns checkoutWorkflowStep if 3-in-1 is enabled', () => {
+      const workflowStep = getWorkflowStep({
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        modal: 'twp',
+        fallbackStep: 'commitment',
+        checkoutWorkflowStep: 'segmentation',
+        checkoutClientId: 'doc_cloud',
+      });
+      expect(workflowStep).to.equal('segmentation');
+    });
+
+    it('returns checkoutWorkflowStep if fallbackStep is not provided', () => {
+      disable3in1();
+      const workflowStep = getWorkflowStep({
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        modal: 'twp',
+        fallbackStep: undefined,
+        checkoutWorkflowStep: 'segmentation',
+        checkoutClientId: 'adobe_com',
+      });
+      expect(workflowStep).to.equal('segmentation');
+      document.querySelector('meta[name="mas-ff-3in1"]').remove();
+    });
+
+    it('returns fallbackStep if fallbackStep is provided, and 3-in-1 is disabled', () => {
+      disable3in1();
+      const workflowStep = getWorkflowStep({
+        wcsOsi: 'vQmS1H18A6_kPd0tYBgKnp-TQIF0GbT6p8SH8rWcLMs',
+        modal: 'twp',
+        fallbackStep: 'commitment',
+        checkoutWorkflowStep: 'segmentation',
+        checkoutClientId: 'doc_cloud',
+      });
+      expect(workflowStep).to.equal('commitment');
+      document.querySelector('meta[name="mas-ff-3in1"]').remove();
     });
   });
 });

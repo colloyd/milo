@@ -4,6 +4,7 @@ import {
     MasElement,
 } from './mas-element.js';
 import { selectOffers, getService } from './utilities.js';
+import { isPromotionActive } from './price/utilities.js';
 import { MODAL_TYPE_3_IN_1 } from '../src/constants.js';
 
 export const CLASS_NAME_DOWNLOAD = 'download';
@@ -152,6 +153,11 @@ export function CheckoutMixin(Base) {
             let offers = await Promise.all(promises);
             // offer is expected to contain one or two offers at max (en, mult)
             offers = offers.map((offer) => selectOffers(offer, options));
+            const offerWithPromo = offers.flat().find((offer) => offer.promotion);
+            const isPromoActive = isPromotionActive(offerWithPromo?.promotion, offerWithPromo?.promotion?.displaySummary?.instant, options.quantity[0]);
+            if (!isPromoActive && options.promotionCode) {
+              delete options.promotionCode;
+            }
             options.country = this.dataset.imsCountry || options.country;
             const checkoutAction = await service.buildCheckoutAction?.(
                 offers.flat(),
@@ -186,7 +192,7 @@ export function CheckoutMixin(Base) {
             const service = getService();
             if (!service) return false;
             const extraOptions = JSON.parse(
-                this.dataset.extraOptions ?? 'null',
+                this.dataset.extraOptions ?? '{}',
             );
             options = { ...extraOptions, ...options, ...overrides };
             version ??= this.masElement.togglePending(options);

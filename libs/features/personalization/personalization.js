@@ -9,31 +9,44 @@ import {
   loadScript,
   localizeLink,
   getFederatedUrl,
+  isSignedOut,
 } from '../../utils/utils.js';
+import {
+  getConsentState,
+  parseOptanonConsent,
+  getAllCookies,
+  KNDCTR_CONSENT_COOKIE,
+  OPT_ON_AND_CONSENT_COOKIE,
+} from '../../martech/helpers.js';
 
 /* c8 ignore start */
+const getUA = () => navigator.userAgent;
 const PHONE_SIZE = window.screen.width < 550 || window.screen.height < 550;
-const safariIpad = navigator.userAgent.includes('Macintosh') && navigator.maxTouchPoints > 1;
-const isGalaxyTab = navigator.userAgent.includes('Linux') && navigator.maxTouchPoints > 1;
+const safariIpad = getUA().includes('Macintosh') && navigator.maxTouchPoints > 1;
+const isGalaxyTab = getUA().includes('Linux') && navigator.maxTouchPoints > 1;
+const isChromeIOS = getUA().includes('CriOS');
+const isEdgeIOS = getUA().includes('EdgiOS');
+const isFirefoxIOS = getUA().includes('FxiOS');
+
 export const US_GEO = 'en-us';
 export const PERSONALIZATION_TAGS = {
   all: () => true,
-  chrome: () => navigator.userAgent.includes('Chrome') && !navigator.userAgent.includes('Edg'),
-  firefox: () => navigator.userAgent.includes('Firefox'),
-  safari: () => navigator.userAgent.includes('Safari') && !navigator.userAgent.includes('Chrome'),
-  edge: () => navigator.userAgent.includes('Edg'),
-  android: () => navigator.userAgent.includes('Android') || isGalaxyTab,
-  ios: () => /iPad|iPhone|iPod/.test(navigator.userAgent) || safariIpad,
-  windows: () => navigator.userAgent.includes('Windows'),
-  mac: () => navigator.userAgent.includes('Macintosh') && !safariIpad,
+  chrome: () => (getUA().includes('Chrome') && !getUA().includes('Edg')) || isChromeIOS,
+  firefox: () => getUA().includes('Firefox') || isFirefoxIOS,
+  safari: () => getUA().includes('Safari') && !getUA().includes('Chrome') && !isChromeIOS && !isEdgeIOS && !isFirefoxIOS,
+  edge: () => getUA().includes('Edg'),
+  android: () => getUA().includes('Android') || isGalaxyTab,
+  ios: () => /iPad|iPhone|iPod/.test(getUA()) || safariIpad,
+  windows: () => getUA().includes('Windows'),
+  mac: () => getUA().includes('Macintosh') && !safariIpad,
   'mobile-device': () => safariIpad
     || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Touch/i
-      .test(navigator.userAgent) || isGalaxyTab,
+      .test(getUA()) || isGalaxyTab,
   phone: () => PERSONALIZATION_TAGS['mobile-device']() && PHONE_SIZE,
   tablet: () => PERSONALIZATION_TAGS['mobile-device']() && !PHONE_SIZE,
   desktop: () => !PERSONALIZATION_TAGS['mobile-device'](),
-  loggedout: () => !window.adobeIMS?.isSignedInUser(),
-  loggedin: () => !!window.adobeIMS?.isSignedInUser(),
+  loggedout: () => isSignedOut(),
+  loggedin: () => !isSignedOut(),
 };
 const PERSONALIZATION_KEYS = Object.keys(PERSONALIZATION_TAGS);
 /* c8 ignore stop */
@@ -45,11 +58,17 @@ const TARGET_EXP_PREFIX = 'target-';
 const INLINE_HASH = '_inline';
 const MARTECH_RETURNED_EVENT = 'martechReturned';
 const PAGE_URL = new URL(window.location.href);
-const FLAGS = {
+export const FLAGS = {
   all: 'all',
   includeFragments: 'include-fragments',
+  includeGnav: 'include-gnav',
 };
 let isPostLCP = false;
+const SELECTOR_TYPES = {
+  fragment: 'fragment',
+  twpButtons: 'twp-buttons',
+  other: 'other',
+};
 
 export const TRACKED_MANIFEST_TYPE = 'personalization';
 
@@ -78,7 +97,7 @@ export const normalizePath = (p, localize = true) => {
 
   if (isDamContent(path) || !path?.includes('/')) return path;
 
-  if (path.includes('/federal/')) return getFederatedUrl(path);
+  const isFederal = path.includes('/federal/');
 
   const config = getConfig();
   if (!path.startsWith(config.codeRoot) && !path.startsWith('http') && !path.startsWith('/')) {
@@ -106,8 +125,10 @@ export const normalizePath = (p, localize = true) => {
         path = `${config.locale.prefix}${pathname}`;
       }
     }
+    path = isFederal ? getFederatedUrl(path) : path;
     return `${path}${hash.replace(mepHash, '')}`;
   } catch (e) {
+    path = isFederal ? getFederatedUrl(path) : path;
     return path;
   }
 };
@@ -146,8 +167,9 @@ function addIds(el, manifestId, targetManifestId) {
 
 function getSelectorType(selector) {
   const sel = selector.toLowerCase().trim();
-  if (sel.startsWith('/') || sel.startsWith('http')) return 'fragment';
-  return 'other';
+  if (sel.startsWith('/') || sel.startsWith('http')) return SELECTOR_TYPES.fragment;
+  if (sel === 'twp buttons') return SELECTOR_TYPES.twpButtons;
+  return SELECTOR_TYPES.other;
 }
 
 export function replacePlaceholders(value, ph) {
@@ -182,7 +204,9 @@ const createFrag = (el, action, content, manifestId, targetManifestId) => {
   }
   const a = createTag('a', { href }, content);
   addIds(a, manifestId, targetManifestId);
-  const frag = createTag('p', undefined, a);
+  const noParagraphWrap = !!el?.parentElement?.closest('p')
+    || (el.nodeName === 'P' && action.includes('pend'));
+  const frag = noParagraphWrap ? a : createTag('p', undefined, a);
   const isDelayedModalAnchor = /#.*delay=/.test(href);
   if (isDelayedModalAnchor) frag.classList.add('hide-block');
   if (isInLcpSection(el)) {
@@ -200,7 +224,7 @@ export const createContent = (el, { content, manifestId, targetManifestId, actio
     addIds(el, manifestId, targetManifestId);
     return el;
   }
-  if (getSelectorType(content) !== 'fragment') {
+  if (getSelectorType(content) !== SELECTOR_TYPES.fragment) {
     const newContent = replacePlaceholders(content);
 
     if (action === 'replace') {
@@ -220,9 +244,23 @@ export const createContent = (el, { content, manifestId, targetManifestId, actio
   return createTag('div', undefined, frag);
 };
 
+export const handleTwpButtons = (el, selector) => {
+  if (getSelectorType(selector) === SELECTOR_TYPES.twpButtons) {
+    const secondaryButton = el.closest('p')?.querySelector('em') || el.closest('div')?.querySelector('em');
+    if (secondaryButton) {
+      const wrapper = secondaryButton.parentElement;
+      const html = wrapper.innerHTML;
+      let result = html.replace(/<em/g, '<strong');
+      result = result.replace(/<\/em/g, '</strong');
+      wrapper.innerHTML = result;
+    }
+  }
+};
+
 const COMMANDS = {
-  [COMMANDS_KEYS.remove]: (el, { content }) => {
+  [COMMANDS_KEYS.remove]: (el, { content, selector }) => {
     if (content !== 'false') el.classList.add(CLASS_EL_DELETE);
+    handleTwpButtons(el, selector);
   },
   [COMMANDS_KEYS.replace]: (el, cmd) => {
     if (!el || el.classList.contains(CLASS_EL_REPLACE)) return;
@@ -410,7 +448,7 @@ function registerInBlockActions(command) {
       }
       return;
     }
-    if (getSelectorType(blockSelector) === 'fragment') {
+    if (getSelectorType(blockSelector) === SELECTOR_TYPES.fragment) {
       if (blockSelector.includes('/federal/')) blockSelector = getFederatedUrl(blockSelector);
       if (command.content.includes('/federal/')) command.content = getFederatedUrl(command.content);
       config.mep.inBlock[blockName].fragments ??= {};
@@ -491,6 +529,12 @@ function getModifiers(selector) {
       flag.split(/_|#_/).forEach((mod) => modifiers.push(mod.toLowerCase().trim()));
     });
   }
+  if (getSelectorType(sel) === SELECTOR_TYPES.twpButtons) {
+    modifiers.push(FLAGS.includeFragments);
+    modifiers.push(FLAGS.all);
+    modifiers.push(FLAGS.includeGnav);
+  }
+
   return { sel, modifiers };
 }
 export function modifyNonFragmentSelector(selector, action) {
@@ -513,6 +557,10 @@ export function modifyNonFragmentSelector(selector, action) {
     modifiedSelector = modifiedSelector.replace(string, '').trim();
   }
 
+  if (action === COMMANDS_KEYS.remove && getSelectorType(selector) === SELECTOR_TYPES.twpButtons) {
+    modifiedSelector = 'a:not([data-remove="false"])';
+  }
+
   return {
     modifiedSelector,
     modifiers,
@@ -525,7 +573,7 @@ function getSelectedElements(sel, rootEl, forceRootEl, action) {
   const selector = sel.trim();
   if (!selector) return {};
 
-  if (getSelectorType(selector) === 'fragment') {
+  if (getSelectorType(selector) === SELECTOR_TYPES.fragment) {
     try {
       const fragments = root.querySelectorAll(
         `a[href*="${normalizePath(selector, false)}"], a[href*="${normalizePath(selector, true)}"]`,
@@ -545,6 +593,14 @@ function getSelectedElements(sel, rootEl, forceRootEl, action) {
   let els;
   try {
     els = root.querySelectorAll(modifiedSelector);
+    if (getSelectorType(selector) === SELECTOR_TYPES.twpButtons) {
+      const regex = /free.trial|essai gratuit|kostenlos testen|testversion|無料で始める|détails de la version d’essai gratuite|details zur kostenlosen testversion/g;
+      els = [...els]
+        .filter((el) => el.outerHTML.toLowerCase().match(regex))
+        .map((el) => (['strong', 'em'].includes(el.parentElement.tagName.toLowerCase())
+          ? el.parentElement
+          : el));
+    }
   } catch (e) {
     /* eslint-disable-next-line no-console */
     log('Invalid selector: ', selector);
@@ -607,7 +663,9 @@ export function handleCommands(
   addSectionAnchors(rootEl);
   commands.forEach((cmd) => {
     const { action, content, selector } = cmd;
-    cmd.content = forceInline && getSelectorType(content) === 'fragment' ? addHash(content, INLINE_HASH) : content;
+    cmd.content = forceInline && getSelectorType(content) === SELECTOR_TYPES.fragment
+      ? addHash(content, INLINE_HASH)
+      : content;
     if (selector.startsWith(IN_BLOCK_SELECTOR_PREFIX)) {
       registerInBlockActions(cmd);
       cmd.selectorType = IN_BLOCK_SELECTOR_PREFIX;
@@ -631,10 +689,12 @@ export function handleCommands(
         COMMANDS[action](el, cmd);
         return;
       }
-      const insertAnchor = getSelectorType(selector) === 'fragment' ? el.parentElement : el;
+      const insertAnchor = getSelectorType(selector) === SELECTOR_TYPES.fragment
+        ? el.parentElement
+        : el;
       insertAnchor?.insertAdjacentElement(
         CREATE_CMDS[action],
-        createContent(el, cmd),
+        createContent(insertAnchor, cmd),
       );
     });
     if ((els.length && !cmd.modifiers.includes(FLAGS.all))
@@ -681,7 +741,7 @@ const getVariantInfo = (line, variantNames, variants, manifestPath, fTargetId) =
       targetManifestId,
     };
 
-    if (action in COMMANDS && variantInfo.selectorType === 'fragment') {
+    if (action in COMMANDS && variantInfo.selectorType === SELECTOR_TYPES.fragment) {
       variants[vn].fragments.push({
         selector: normalizePath(variantInfo.selector.split(' #_')[0]),
         val: normalizePath(line[vn]),
@@ -945,6 +1005,9 @@ async function getPersonalizationVariant(
     if (name.toLowerCase().startsWith('previouspage-')) return checkForPreviousPageMatch(name);
     if (hasCountryMatch(name, config)) return true;
     if (userEntitlements?.includes(name)) return true;
+    const { lob, event } = config.mep.promises;
+    if (lob && lob === name.split('lob-')[1]?.toLowerCase()) return true;
+    if (name === 'registered' && event) return true;
     return PERSONALIZATION_KEYS.includes(name) && PERSONALIZATION_TAGS[name]();
   };
 
@@ -997,7 +1060,60 @@ export const addMepAnalytics = (config, header) => {
     }
   });
 };
-export async function getManifestConfig(info = {}, variantOverride = false) {
+
+export function getMepConsentConfig() {
+  const cookies = getAllCookies();
+  const optOnConsentCookie = cookies[OPT_ON_AND_CONSENT_COOKIE];
+  const kndctrConsentCookie = cookies[KNDCTR_CONSENT_COOKIE] || '';
+  const consentState = getConsentState({ optOnConsentCookie, kndctrConsentCookie });
+
+  if (!optOnConsentCookie || consentState === 'pre') {
+    return {
+      performance: true,
+      advertising: isSignedOut() && consentState !== 'pre',
+    };
+  }
+  return parseOptanonConsent(optOnConsentCookie).configuration;
+}
+
+export const overrideVariant = (manifestPath, variantName) => {
+  const config = getConfig();
+  if (!config.mep.variantOverride) config.mep.variantOverride = {};
+  if (!config.mep.variantOverride[manifestPath]) {
+    config.mep.variantOverride[manifestPath] = variantName;
+  }
+};
+
+export const getGeoRestriction = (manifestConfig) => {
+  const { geoRestriction, manifestPath } = manifestConfig;
+  if (!geoRestriction) return true;
+  const geoArray = geoRestriction?.split(',').map((item) => item.trim().toLowerCase());
+  const isAllowed = geoArray.includes(getConfig().mep.akamaiCode);
+  if (!isAllowed) overrideVariant(manifestPath, 'Default');
+  return isAllowed;
+};
+
+export function getManifestMarketingAction(mktgAction, source) {
+  const allowedServices = ['core services', 'non-marketing', 'marketing decrease', 'marketing increase'];
+  if (allowedServices.includes(mktgAction)) return mktgAction;
+  if (source?.includes('promo')) return 'core services';
+  return 'marketing increase';
+}
+
+export function canServeManifest(manifestConfig) {
+  if (!getGeoRestriction(manifestConfig)) return false;
+  const { mktgAction, variantNames, manifestPath } = manifestConfig;
+  if (mktgAction === 'core services') return true;
+
+  const { performance, advertising } = getConfig().mep.consentState;
+  if (mktgAction === 'non-marketing') return performance;
+  if (mktgAction === 'marketing increase') return advertising;
+
+  if (!advertising || !performance) overrideVariant(manifestPath, variantNames[0]);
+  return true;
+}
+
+async function getManifestConfig(info, variantOverride) {
   const {
     name,
     manifestData,
@@ -1056,13 +1172,23 @@ export async function getManifestConfig(info = {}, variantOverride = false) {
       executionOrder[key] = index > -1 ? index : 1;
     });
     manifestConfig.executionOrder = `${executionOrder['manifest-execution-order']}-${executionOrder['manifest-type']}`;
+    manifestConfig.mktgAction = infoObj['manifest-marketing-action']?.toLowerCase();
+    manifestConfig.geoRestriction = infoObj['manifest-geo-restriction']?.toLowerCase();
   } else {
     // eslint-disable-next-line prefer-destructuring
     manifestConfig.manifestType = infoKeyMap['manifest-type'][1];
     manifestConfig.executionOrder = '1-1';
   }
 
+  let finalDisabled = disabled;
+  manifestConfig.mktgAction = getManifestMarketingAction(manifestConfig.mktgAction, source);
   manifestConfig.manifestPath = normalizePath(manifestPath);
+  const isAllowed = canServeManifest(manifestConfig);
+  if (!isAllowed) {
+    if (!getConfig().mep?.preview) return null;
+    finalDisabled = true;
+  }
+
   manifestConfig.selectedVariantName = await getPersonalizationVariant(
     manifestConfig.manifestPath,
     manifestConfig.variantNames,
@@ -1073,7 +1199,7 @@ export async function getManifestConfig(info = {}, variantOverride = false) {
   manifestConfig.name = name;
   manifestConfig.manifest = manifestPath;
   manifestConfig.manifestUrl = manifestUrl;
-  manifestConfig.disabled = disabled;
+  manifestConfig.disabled = finalDisabled;
   manifestConfig.event = event;
   if (source?.length) manifestConfig.source = source;
   return manifestConfig;
@@ -1211,6 +1337,7 @@ export async function applyPers({ manifests }) {
   if (!manifests?.length) return;
   let experiments = manifests;
   const config = getConfig();
+
   for (let i = 0; i < experiments.length; i += 1) {
     experiments[i] = await getManifestConfig(
       experiments[i],
@@ -1271,17 +1398,19 @@ export const combineMepSources = async (
   rocPersEnabled,
   promoEnabled,
   mepParam,
+  mepMarketingDecrease,
 ) => {
   let persManifests = [];
 
-  if (persEnabled) {
-    persManifests = parseManifestUrlAndAddSource(persEnabled, 'pzn');
-  }
-
-  if (rocPersEnabled) {
-    const rocPersManifest = parseManifestUrlAndAddSource(rocPersEnabled, 'pzn-roc');
-    persManifests = persManifests.concat(rocPersManifest);
-  }
+  const sources = {
+    pzn: persEnabled,
+    'pzn-roc': rocPersEnabled,
+    'mktg-decrease': mepMarketingDecrease,
+  };
+  Object.entries(sources).forEach(([source, value]) => {
+    if (!value) return;
+    persManifests = persManifests.concat(parseManifestUrlAndAddSource(value, source));
+  });
 
   if (promoEnabled) {
     const { default: getPromoManifests } = await import('./promo-utils.js');
@@ -1307,6 +1436,7 @@ export const combineMepSources = async (
       }
     });
   }
+
   return persManifests;
 };
 
@@ -1447,12 +1577,14 @@ export async function init(enablements = {}) {
   const {
     mepParam, mepHighlight, mepButton, pzn, pznroc, promo, enablePersV2,
     target, ajo, countryIPPromise, mepgeolocation, targetInteractionPromise, calculatedTimeout,
-    postLCP,
+    postLCP, promises, mepMarketingDecrease, akamaiCode,
   } = enablements;
   const config = getConfig();
+
   if (postLCP) {
     isPostLCP = true;
   } else {
+    for (const [key, promise] of Object.entries(promises)) promises[key] = await promise;
     config.mep = {
       updateFragDataProps,
       preview: (mepButton !== 'off'
@@ -1467,9 +1599,18 @@ export async function init(enablements = {}) {
       countryIPPromise,
       geoLocation: mepgeolocation,
       targetInteractionPromise,
+      promises,
+      akamaiCode: akamaiCode?.toLowerCase(),
+      consentState: getMepConsentConfig(),
     };
 
-    manifests = manifests.concat(await combineMepSources(pzn, pznroc, promo, mepParam));
+    manifests = manifests.concat(await combineMepSources(
+      pzn,
+      pznroc,
+      promo,
+      mepParam,
+      mepMarketingDecrease,
+    ));
     manifests?.forEach((manifest) => {
       if (manifest.disabled) return;
       const normalizedURL = normalizePath(manifest.manifestPath);
@@ -1477,7 +1618,6 @@ export async function init(enablements = {}) {
     });
     if (pzn || pznroc) loadLink(getXLGListURL(config), { as: 'fetch', crossorigin: 'anonymous', rel: 'preload' });
   }
-
   if (enablePersV2 && target === true) {
     manifests = manifests.concat(await handleMartechTargetInteraction(
       { config, targetInteractionPromise, calculatedTimeout },

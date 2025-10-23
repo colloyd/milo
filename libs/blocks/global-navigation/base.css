@@ -28,8 +28,15 @@
   --feds-color-link: #292929;
   --feds-color-blue-link: #274dea;
   --feds-color-link--hover: #1d3ecf;
+  --feds-color-link-dark: #DBDBDB;
+  --feds-borderColor-link-dark: #393939;
   --feds-color-navLink-description: #505050;
   --feds-color-link-breadcrumbs: #707070;
+
+  /* CTA Buttons */
+  --feds-cta-primary-bg: #3b63fb;
+  --feds-cta-primary-bg--hover: #274dea;
+
   /* Footer */
   --feds-background-footer: #fafafa;
   --feds-borderColor-featuredProducts: #999;
@@ -46,6 +53,12 @@
 
   /* App banner */
   --app-banner-height: 76px;
+
+  /* Skeleton loading state */
+  --feds-skeleton-color-1: #D3D3D3;
+  --feds-skeleton-color-2: #EAEAEA;
+  --feds-skeleton-color-3: #D3D3D3;
+  --feds-skeleton-opacity: 0.7;
 }
 
 /* Nav Link styles */
@@ -75,6 +88,10 @@ header.new-nav .feds-nav > section.feds-navItem > .feds-popup .has-subheader .fe
 
 .feds-navLink:not(.feds-navLink--hoverCaret) {
   column-gap: 15px;
+}
+
+html[lang="ja-jp"] a.feds-navLink wbr {
+  display: none;
 }
 
 .feds-navLink--blue {
@@ -241,16 +258,30 @@ header.global-navigation.ready {
     margin-right: 5px;
   }
 
-  .feds-navLink-image {
+  .global-navigation .feds-navLink-image {
     display: flex;
   }
 
-  .feds-navLink-image picture,
-  .feds-navLink-image img {
+  .global-navigation .feds-navLink-image picture,
+  .global-navigation .feds-navLink-image img {
     display: block;
   }
 
-  .feds-navLink-image picture {
+  .global-navigation .feds-navLink-image picture {
+    width: max-content;
+    max-width: 25px;
+  }
+
+  .global-footer:not(.mobile) .feds-navLink-image {
+    display: flex;
+  }
+
+  .global-footer:not(.mobile) .feds-navLink-image picture,
+  .global-footer:not(.mobile) .feds-navLink-image img {
+    display: block;
+  }
+
+  .global-footer:not(.mobile) .feds-navLink-image picture {
     width: max-content;
     max-width: 25px;
   }

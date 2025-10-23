@@ -1,6 +1,6 @@
 /*** Variables ***/
 
- :root {
+:root {
   --global-height-nav: 64px;
   --feds-height-nav: 63px;
   --global-height-breadcrumbs: 33px;
@@ -784,6 +784,13 @@ header.global-navigation.new-nav.local-nav {
   top: 0;
 }
 
+body.mweb-enabled {
+  --type-heading-all-weight: 800;
+  [class^="heading-"], h1, h2, h3, h4, h5, h6 {
+    font-weight: var(--type-heading-all-weight);
+  }
+}
+
 @media (min-width: 900px) {
   header.global-navigation.has-breadcrumbs {
     padding-bottom: var(--global-height-breadcrumbs);
@@ -1028,6 +1035,23 @@ a.static:active  {
 
   header.gnav.has-breadcrumbs + main {
     margin-top: 97px;
+  }
+}
+
+/* tablet down */
+@media screen and (max-width: 1199px) {
+  /* Mweb specific changes for body typography */
+  .mweb-enabled {
+    --type-body-xxl-size: calc(var(--font-size-multiplier, 1) * 24px);
+    --type-body-xxl-lh: 36px;
+    --type-body-xl-size: calc(var(--font-size-multiplier, 1) * 20px);
+    --type-body-xl-lh: 30px;
+    --type-body-l-size: calc(var(--font-size-multiplier, 1) * 18px);
+    --type-body-l-lh: 27px;
+    --type-body-m-size: calc(var(--font-size-multiplier, 1) * 16px);
+    --type-body-m-lh: 24px;
+    --type-body-s-size: calc(var(--font-size-multiplier, 1) * 14px);
+    --type-body-s-lh: 21px;
   }
 }
 

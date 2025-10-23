@@ -131,10 +131,11 @@ describe('class "InlinePrice"', () => {
         expect(inlinePrice.outerHTML).to.be.html(snapshots.annual);
     });
 
-    it('renders price with promo with strikethrough', async () => {
+    it('renders promo price', async () => {
         await initMasCommerceService();
         const inlinePrice = mockInlinePrice('promoStikethrough', 'abm-promo');
         inlinePrice.dataset.promotionCode = 'nicopromo';
+        inlinePrice.dataset.displayOldPrice = 'true';
         await inlinePrice.onceSettled();
         expect(inlinePrice.outerHTML).to.be.html(snapshots.promoStikethrough);
     });
@@ -143,7 +144,6 @@ describe('class "InlinePrice"', () => {
         await initMasCommerceService();
         const inlinePrice = mockInlinePrice('promo','abm-promo');
         inlinePrice.dataset.promotionCode = 'nicopromo';
-        inlinePrice.dataset.displayOldPrice = 'false';
         await inlinePrice.onceSettled();
         expect(inlinePrice.outerHTML).to.be.html(snapshots.promo);
     });
@@ -222,8 +222,11 @@ describe('class "InlinePrice"', () => {
     });
 
     it('renders tax exclusive price', async () => {
-        await initMasCommerceService({ 'force-tax-exclusive': true });
-        const inlinePrice = mockInlinePrice('taxExclusive', 'tax-exclusive');
+        await initMasCommerceService({ country: 'CA' , language: 'en'});
+        const inlinePrice = mockInlinePrice('taxExclusive');
+        inlinePrice.dataset.wcsOsi = 'abm-promo';
+        inlinePrice.dataset.displayTax = 'true';
+        inlinePrice.dataset.forceTaxExclusive = 'true';
         inlinePrice.dataset.promotionCode = 'nicopromo';
         await inlinePrice.onceSettled();
         expect(inlinePrice.outerHTML).to.be.html(snapshots.taxExclusive);
@@ -272,11 +275,7 @@ describe('class "InlinePrice"', () => {
         it('fails placeholder if "orders" array is empty', async () => {
             await initMasCommerceService();
             const inlinePrice = mockInlinePrice('abm2','abm');
-            inlinePrice.renderOffers(
-                [],
-                {},
-                inlinePrice.masElement.togglePending(),
-            );
+            inlinePrice.renderOffers([]);
             expect(inlinePrice.state).to.equal(InlinePrice.STATE_FAILED);
         });
 
@@ -304,51 +303,6 @@ describe('class "InlinePrice"', () => {
         });
     });
 
-    describe('method "updateOptions"', () => {
-        it('updates element data attributes', async () => {
-            initMasCommerceService();
-            const inlinePrice = InlinePrice.createInlinePrice({
-                template: 'price',
-                wcsOsi: 'abm',
-            });
-            const options = {
-                displayOldPrice: true,
-                displayPerUnit: true,
-                displayRecurrence: true,
-                displayTax: true,
-                displayPlanType: true,
-                forceTaxExclusive: true,
-                perpetual: true,
-                promotionCode: 'promo',
-                quantity: ['1', '2'],
-                template: 'priceOptical',
-                wcsOsi: ['m2m', 'puf'],
-            };
-            inlinePrice.updateOptions(options);
-            const { dataset } = inlinePrice;
-            expect(dataset.displayOldPrice).to.equal(
-                String(options.displayOldPrice),
-            );
-            expect(dataset.displayPerUnit).to.equal(
-                String(options.displayPerUnit),
-            );
-            expect(dataset.displayRecurrence).to.equal(
-                String(options.displayRecurrence),
-            );
-            expect(dataset.displayTax).to.equal(String(options.displayTax));
-            expect(dataset.forceTaxExclusive).to.equal(
-                String(options.forceTaxExclusive),
-            );
-            expect(dataset.perpetual).to.equal(String(options.perpetual));
-            expect(dataset.promotionCode).to.equal(
-                String(options.promotionCode),
-            );
-            expect(dataset.quantity).to.equal(String(options.quantity));
-            expect(dataset.template).to.equal(String(options.template));
-            expect(dataset.wcsOsi).to.equal(String(options.wcsOsi));
-        });
-    });
-
     describe('default display tax', () => {
         const getPriceLiterals = (settings, priceLiterals) => {
           //we are expecting an array of objects with lang and literals
@@ -363,7 +317,6 @@ describe('class "InlinePrice"', () => {
           return {};
         }
 
-        const SEGMENTS = ['individual', 'business', 'student', 'university'];
         const TESTS = [
           {
             locale: 'AE_ar',
@@ -709,7 +662,10 @@ describe('class "InlinePrice"', () => {
             locale: 'US_en',
             expected: [[false, false], [false, false], [false, false], [false, false]]
           },
-        ];
+        ]
+        //.filter((test) => test.locale === 'BE_en');  uncomment to run only one test
+
+        const SEGMENTS = ['individual', 'business', 'student', 'university']
 
         TESTS.forEach((test) => {
             SEGMENTS.forEach((segment, index) => {
@@ -729,7 +685,6 @@ describe('class "InlinePrice"', () => {
                     const priceTaxElement = inlinePrice.querySelector(
                         '.price-tax-inclusivity',
                     );
-                    const priceDecimals = inlinePrice.querySelector('.price-decimals').textContent;
                     if (test.expected[index][0]) {
                         expect(priceTaxElement.classList.contains('disabled')).to.be.false;
                         let taxInclExclLabel
@@ -775,14 +730,7 @@ describe('commerce service', () => {
             const service = await initMasCommerceService();
             const { collectPriceOptions, buildPriceHTML } = new Price({
                 literals: { price: {} },
-                providers: {
-                    price: [
-                        (p, o) => {
-                            /*nop*/
-                        },
-                    ],
-                },
-                settings: getSettings(service.config),
+                settings: getSettings(service.config, service),
             });
             const inlinePrice1 = mockInlinePrice('abm');
             const options = collectPriceOptions({}, inlinePrice1);

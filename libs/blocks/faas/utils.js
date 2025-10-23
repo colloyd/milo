@@ -17,7 +17,7 @@ export const getFaasHostSubDomain = (environment) => {
   if (env.name === 'prod' || faasEnv === 'prod') {
     return '';
   }
-  if (faasEnv === 'stage') {
+  if (env.name === 'stage' || faasEnv === 'stage') {
     return 'staging.';
   }
   if (faasEnv === 'dev') {
@@ -344,6 +344,10 @@ export const makeFaasConfig = (targetState) => {
   // Multiple Campaign Ids
   if (targetState.q103) {
     Object.assign(config.q, { 103: { c: targetState.q103 } });
+  }
+
+  if (targetState.qjs69) {
+    Object.assign(config.q, { 69: { c: { ...targetState.qjs69 } } });
   }
 
   return config;

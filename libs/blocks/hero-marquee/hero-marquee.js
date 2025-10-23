@@ -36,7 +36,17 @@ function decorateList(el, classes) {
     firstDiv.classList.add('foreground');
     [...listItems].forEach((item) => {
       const firstElemIsIcon = item.children[0]?.classList.contains('icon');
-      if (firstElemIsIcon) item.classList.add('icon-item');
+      const firstElemIsSvg = item.children[0]?.querySelector('img[src*=".svg"]');
+      if (firstElemIsIcon || firstElemIsSvg) item.classList.add('icon-item');
+      if (firstElemIsSvg) {
+        firstElemIsSvg.parentElement.classList.add('list-icon');
+        item.closest('ul, ol').classList.add('has-svg-bullet');
+        const listText = createTag('div', { class: 'list-text' });
+        [...item.childNodes].forEach((c) => {
+          if (c !== item.children[0]) listText.append(c);
+        });
+        item.append(listText);
+      }
       if (!item.parentElement.classList.contains('icon-list')) item.parentElement.classList.add('icon-list');
     });
   }
@@ -82,6 +92,11 @@ async function decorateLockupRow(el, classes) {
     el.classList.remove(usedLockupClass);
   }
   el.classList.add(`${usedLockupClass?.split('-')[0] || 'l'}-lockup`);
+  [...child.children].forEach((node) => {
+    if (node.childElementCount || !node.textContent.trim()) return;
+    const newSpan = createTag('span', { class: 'lockup-label' }, node.textContent.trim());
+    node.parentElement.replaceChild(newSpan, node);
+  });
 }
 
 function decorateBg(el) {

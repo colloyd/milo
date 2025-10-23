@@ -2,7 +2,7 @@
  * tabs - consonant v6
  * https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Roles/Tab_Role
  */
-import { createTag, MILO_EVENTS, getConfig } from '../../utils/utils.js';
+import { createTag, MILO_EVENTS, getConfig, localizeLink } from '../../utils/utils.js';
 import { processTrackingLabels } from '../../martech/attributes.js';
 
 const PADDLE = '<svg aria-hidden="true" viewBox="0 0 8 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M1.50001 13.25C1.22022 13.25 0.939945 13.1431 0.726565 12.9292C0.299315 12.5019 0.299315 11.8096 0.726565 11.3823L5.10938 7L0.726565 2.61768C0.299315 2.19043 0.299315 1.49805 0.726565 1.0708C1.15333 0.643068 1.84669 0.643068 2.27345 1.0708L7.4297 6.22656C7.63478 6.43164 7.75001 6.70996 7.75001 7C7.75001 7.29004 7.63478 7.56836 7.4297 7.77344L2.27345 12.9292C2.06007 13.1431 1.7798 13.2495 1.50001 13.25Z" fill="currentColor"/></svg>';
@@ -57,7 +57,37 @@ export function getRedirectionUrl(linkedTabsList, targetId) {
   return currentUrl;
 }
 
-function changeTabs(e) {
+const generateStorageName = (tabId) => {
+  const { pathname } = window.location;
+  return `${pathname}/${tabId}-tab-state`;
+};
+
+const loadActiveTab = (config) => {
+  if (config.remember !== 'on') return 0;
+
+  const tabId = config['tab-id'];
+  return sessionStorage.getItem(generateStorageName(tabId));
+};
+
+const saveActiveTabInStorage = (targetId, config) => {
+  if (config.remember !== 'on') return;
+
+  const delimiterIndex = targetId.lastIndexOf('-');
+  const activeTabIndex = targetId.substring(delimiterIndex + 1);
+  const storageName = generateStorageName(config['tab-id']);
+  sessionStorage.setItem(storageName, activeTabIndex);
+};
+
+function getContentElement(parent, traversalDepth) {
+  let element = parent;
+  for (let i = 0; i < traversalDepth; i += 1) {
+    element = element.parentNode;
+    if (!element) return null;
+  }
+  return element.lastElementChild;
+}
+
+function changeTabs(e, config) {
   const { target } = e;
   const targetId = target.getAttribute('id');
   const redirectionUrl = getRedirectionUrl(linkedTabs, targetId);
@@ -67,8 +97,9 @@ function changeTabs(e) {
     return;
   }
   const parent = target.parentNode;
-  const content = parent.parentNode.parentNode.lastElementChild;
   const tabsBlock = target.closest('.tabs');
+  const hasSegmentedControl = tabsBlock.classList.contains('segmented-control');
+  const content = hasSegmentedControl ? getContentElement(parent, 3) : getContentElement(parent, 2);
   const blockId = tabsBlock.id;
   const isRadio = target.getAttribute('role') === 'radio';
   const attributeName = isRadio ? 'aria-checked' : 'aria-selected';
@@ -84,11 +115,13 @@ function changeTabs(e) {
     .querySelectorAll(`[${attributeName}="true"][data-block-id="${blockId}"]`)
     .forEach((t) => {
       t.setAttribute(attributeName, false);
+      t.setAttribute('tabindex', '-1');
       if (Object.keys(tabColor).length) {
         t.removeAttribute('style', 'backgroundColor');
       }
     });
   target.setAttribute(attributeName, true);
+  target.setAttribute('tabindex', '0');
   if (tabColor[targetId]) {
     target.style.backgroundColor = tabColor[targetId];
   }
@@ -99,6 +132,7 @@ function changeTabs(e) {
   targetContent?.removeAttribute('hidden');
   if (tabsBlock.classList.contains('stacked-mobile')) scrollStackedMobile(targetContent);
   window.dispatchEvent(tabChangeEvent);
+  saveActiveTabInStorage(targetId, config);
 }
 
 function getStringKeyName(str) {
@@ -129,6 +163,11 @@ function configTabs(config, rootElem) {
     const tabBtn = rootElem.querySelector(`[data-deeplink="${deeplinkParam}"]`);
     if (tabBtn) {
       tabBtn.click();
+      if (config.remember === 'on') {
+        const deeplinkUrl = new URL(window.location.href);
+        deeplinkUrl.searchParams.delete(config.id);
+        window.history.replaceState({}, null, deeplinkUrl);
+      }
       return;
     }
   }
@@ -147,23 +186,28 @@ function initTabs(elm, config, rootElem) {
 
   tabLists.forEach((tabList) => {
     tabList.addEventListener('keydown', (e) => {
+      const isRtl = document.dir === 'rtl';
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-        if (e.key === 'ArrowRight') {
+        if (e.key === (isRtl ? 'ArrowLeft' : 'ArrowRight')) {
           tabFocus += 1;
           /* c8 ignore next */
           if (tabFocus >= tabs.length) tabFocus = 0;
-        } else if (e.key === 'ArrowLeft') {
+        } else if (e.key === (isRtl ? 'ArrowRight' : 'ArrowLeft')) {
           tabFocus -= 1;
           /* c8 ignore next */
           if (tabFocus < 0) tabFocus = tabs.length - 1;
         }
-        tabs[tabFocus].setAttribute('tabindex', 0);
+        tabs.forEach((t) => t.setAttribute('tabindex', '-1'));
+        tabs[tabFocus].setAttribute('tabindex', '0');
         tabs[tabFocus].focus();
       }
     });
   });
   tabs.forEach((tab) => {
-    tab.addEventListener('click', changeTabs);
+    tab.addEventListener('click', (e) => changeTabs(e, config));
+    if (elm?.classList.contains('segmented-control')) {
+      tab.addEventListener('focus', () => scrollTabIntoView(tab));
+    }
   });
   if (config) configTabs(config, rootElem);
 }
@@ -257,9 +301,16 @@ const handlePillSize = (pill) => {
 
 export function assignLinkedTabs(linkedTabsList, metaSettings, id, val) {
   if (!metaSettings.link || !id || !val || !linkedTabsList) return;
-  const relativeLinkRegex = /^\/(?:[a-zA-Z0-9-_]+(?:\/[a-zA-Z0-9-_]+)*)?$/;
-  if (relativeLinkRegex.test(metaSettings.link)) {
-    linkedTabsList[`tab-${id}-${val}`] = metaSettings.link;
+  const { link } = metaSettings;
+
+  try {
+    const url = new URL(link);
+    linkedTabsList[`tab-${id}-${val}`] = localizeLink(link, url.hostname);
+  } catch {
+    // @see https://jira.corp.adobe.com/browse/MWPW-170787
+    // TODO support for relative links to be removed after authoring makes full switch
+    if (!/^\/(?:[a-zA-Z0-9-_]+(?:\/[a-zA-Z0-9-_]+)*)?$/.test(link)) return;
+    linkedTabsList[`tab-${id}-${val}`] = link;
   }
 }
 
@@ -282,6 +333,10 @@ const init = (block) => {
   });
   const tabId = config.id || getUniqueId(block, rootElem);
   config['tab-id'] = tabId;
+
+  const activeTabIndex = loadActiveTab(config);
+  if (activeTabIndex) config['active-tab'] = activeTabIndex;
+
   block.id = `tabs-${tabId}`;
   parentSection?.classList.add(`tablist-${tabId}-section`);
 
@@ -303,7 +358,9 @@ const init = (block) => {
   const tabListItems = rows[0].querySelectorAll(':scope li');
   if (tabListItems) {
     const pillVariant = [...block.classList].find((variant) => variant.includes('pill'));
-    const btnClass = pillVariant ? handlePillSize(pillVariant) : 'heading-xs';
+    const btnClass = (pillVariant && handlePillSize(pillVariant))
+    || (block.classList.contains('segmented-control') && 'heading-xxs')
+    || 'heading-xs';
     tabListItems.forEach((item, i) => {
       const tabName = config.id ? i + 1 : getStringKeyName(item.textContent);
       const controlId = `tab-panel-${tabId}-${tabName}`;
@@ -311,7 +368,7 @@ const init = (block) => {
         role: isRadio ? 'radio' : 'tab',
         class: btnClass,
         id: `tab-${tabId}-${tabName}`,
-        tabindex: '0',
+        tabindex: (i === 0) ? '0' : '-1',
         [isRadio ? 'aria-checked' : 'aria-selected']: (i === 0) ? 'true' : 'false',
         'data-block-id': `tabs-${tabId}`,
         'daa-state': 'true',
@@ -338,11 +395,21 @@ const init = (block) => {
     tabListContainer.dataset.pretext = config.pretext;
   }
 
+  // For segmented-control variant, wrap tabList in tabs-wrapper container
+  if (block.classList.contains('segmented-control')) {
+    const tabsWrapper = createTag('div', { class: 'tabs-wrapper' });
+    tabList.insertAdjacentElement('beforebegin', tabsWrapper);
+    tabsWrapper.append(tabList);
+  }
+
   // Tab Paddles
   const paddleLeft = createTag('button', { class: 'paddle paddle-left', disabled: '', 'aria-hidden': true, 'aria-label': 'Scroll tabs to left' }, PADDLE);
   const paddleRight = createTag('button', { class: 'paddle paddle-right', disabled: '', 'aria-hidden': true, 'aria-label': 'Scroll tabs to right' }, PADDLE);
-  tabList.insertAdjacentElement('afterend', paddleRight);
-  block.prepend(paddleLeft);
+  // For segmented-control variant, do not add paddles relative to tab-list-container
+  if (!block.classList.contains('segmented-control')) {
+    tabList.insertAdjacentElement('afterend', paddleRight);
+    block.prepend(paddleLeft);
+  }
   initPaddles(tabList, paddleLeft, paddleRight, isRadio);
 
   // Tab Sections
