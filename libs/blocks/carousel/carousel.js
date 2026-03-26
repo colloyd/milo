@@ -15,7 +15,13 @@ const ARROW_PREVIOUS_IMG = `<svg xmlns="http://www.w3.org/2000/svg" width="21" h
 <path d="M19.2214 10.8918C19.3516 10.5773 19.3516 10.2226 19.2214 9.90808C19.1562 9.75098 19.0621 9.60895 18.9435 9.49041L12.9241 3.47092C12.4226 2.96819 11.6076 2.96819 11.1061 3.47092C10.604 3.97239 10.604 4.78743 11.1061 5.2889L14.9312 9.11399H2.4314C1.72109 9.11399 1.146 9.69036 1.146 10.4C1.146 11.1097 1.72109 11.6861 2.4314 11.6861H14.9312L11.1061 15.5112C10.604 16.0126 10.604 16.8277 11.1061 17.3291C11.3568 17.5805 11.6863 17.7062 12.0151 17.7062C12.3439 17.7062 12.6733 17.5805 12.9241 17.3291L18.9436 11.3097C19.0622 11.1911 19.1562 11.0491 19.2214 10.8918Z"/>
 </svg>`;
 const LIGHTBOX_ICON = `<img class="expand-icon" alt="Expand carousel to full screen" src="${base}/blocks/carousel/img/expand.svg" height="14" width="20">`;
-const CLOSE_ICON = `<img class="expand-icon" alt="Expand carousel to full screen" src="${base}/blocks/carousel/img/close.svg" height="20" width="20">`;
+const CLOSE_ICON = `<svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
+  <g transform="translate(-10500 3403)">
+    <circle cx="10" cy="10" r="10" transform="translate(10500 -3403)"/>
+    <line y1="8" x2="8" transform="translate(10506 -3397)" fill="none" stroke-width="2"/>
+    <line x1="8" y1="8" transform="translate(10506 -3397)" fill="none" stroke-width="2"/>
+  </g>
+</svg>`;
 
 const KEY_CODES = {
   SPACE: 'Space',
@@ -23,8 +29,13 @@ const KEY_CODES = {
   HOME: 'Home',
   ARROW_LEFT: 'ArrowLeft',
   ARROW_RIGHT: 'ArrowRight',
+  ESCAPE: 'Escape',
+  TAB: 'Tab',
 };
 const FOCUSABLE_SELECTOR = 'a, :not(.video-container, .pause-play-wrapper) > video';
+
+const isDesktop = window.matchMedia('(min-width: 900px)');
+const isMobileVp = window.matchMedia('(max-width: 599px)');
 
 function getPreviousAriaLabel(currentIndex, totalSlides) {
   return currentIndex === 0 && totalSlides > 0
@@ -37,6 +48,21 @@ function updatePreviousAriaLabel(carouselElements) {
   if (!nextPreviousBtns?.[0]) return;
 
   nextPreviousBtns[0].setAttribute('aria-label', getPreviousAriaLabel(currentActiveIndex, slides.length));
+}
+
+function isHintingTablet(el) {
+  return el.classList.contains('hinting-tablet') && window.matchMedia('(min-width: 600px) and (max-width: 1199px)').matches;
+}
+
+function getCircularNavState(carouselElements) {
+  const { el, currentActiveIndex, slides } = carouselElements;
+  const atStart = currentActiveIndex === 0;
+  if (!el.classList.contains('disable-circular-nav')) return { atStart, atEnd: false };
+
+  const lastIdx = isHintingTablet(el) ? slides.length - 2 : slides.length - 1;
+  const atEnd = currentActiveIndex >= lastIdx;
+
+  return { atStart, atEnd };
 }
 
 function decorateNextPreviousBtns(slides, currentIndex = 0) {
@@ -134,6 +160,17 @@ function updateButtonStates(carouselElements) {
   }
 }
 
+function checkCircularNav(carouselElements) {
+  const { el, nextPreviousBtns } = carouselElements;
+  if (!el.classList.contains('disable-circular-nav')) return;
+  const { atStart, atEnd } = getCircularNavState(carouselElements);
+  nextPreviousBtns?.forEach((btn, i) => {
+    const off = i === 0 ? atStart : atEnd;
+    btn.disabled = off;
+    btn.classList.toggle('disabled', off);
+  });
+}
+
 function handleNext(nextElement, elements) {
   if (nextElement.nextElementSibling) {
     return nextElement.nextElementSibling;
@@ -148,7 +185,33 @@ function handlePrevious(previousElment, elements) {
   return elements[elements.length - 1];
 }
 
-function setEqualHeight(slides, slideContainer, currentActiveIndex = 0) {
+async function waitImgReady(img) {
+  if (!img) return;
+
+  if (!img.complete) {
+    await new Promise((resolve) => {
+      img.addEventListener('load', resolve, { once: true });
+    });
+  }
+
+  if ((img.offsetHeight === 0 || img.clientHeight === 0) && img.naturalHeight) {
+    await new Promise((resolve) => {
+      const ro = new ResizeObserver(() => {
+        if (img.offsetHeight > 0 && img.clientHeight > 0) {
+          ro.disconnect();
+          resolve();
+        }
+      });
+      ro.observe(img);
+    });
+  }
+}
+
+async function setEqualHeight(slides, slideContainer, currentActiveIndex = 0) {
+  const allImgs = slides[0]?.querySelectorAll('picture img');
+  if (allImgs?.length) {
+    await Promise.all([...allImgs].map((img) => waitImgReady(img)));
+  }
   const maxHeight = Math.max(...slides.map((slide) => slide.offsetHeight));
   const activeSlide = slides[currentActiveIndex];
   slides.forEach((slide) => {
@@ -173,18 +236,38 @@ function removeEqualHeight(slides, slideContainer) {
 
 function handleLightboxButtons(lightboxBtns, el, slideWrapper) {
   const curtain = createTag('div', { class: 'carousel-curtain' });
+  const header = document.querySelector('header');
+  const headerZIndex = header?.style.zIndex;
+  const fedsLocalnav = document.querySelector('.feds-localnav');
+  const fedsLocalnavZIndex = fedsLocalnav?.style.zIndex;
+
+  const closeLightbox = () => {
+    if (header) header.style.zIndex = headerZIndex;
+    if (fedsLocalnav) fedsLocalnav.style.zIndex = fedsLocalnavZIndex;
+    el.classList.remove('lightbox-active');
+    el.removeAttribute('role');
+    el.removeAttribute('aria-modal');
+    el.removeAttribute('name');
+    curtain.remove();
+  };
 
   [...lightboxBtns].forEach((button) => {
     button.addEventListener('click', (event) => {
       event.preventDefault();
       if (button.classList.contains('carousel-expand')) {
+        if (header) header.style.zIndex = '0';
+        if (fedsLocalnav) fedsLocalnav.style.zIndex = '0';
         el.classList.add('lightbox-active');
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-modal', 'true');
+        el.setAttribute('name', el.querySelector('h1, h2, h3, h4, h5, h6')?.textContent.trim() || 'Carousel modal');
         slideWrapper.append(curtain);
+        const firstFocusable = el.querySelector('button:not(.carousel-expand), a, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        firstFocusable?.focus();
       }
 
       if (button.classList.contains('carousel-close')) {
-        el.classList.remove('lightbox-active');
-        curtain.remove();
+        closeLightbox();
       }
     }, true);
   });
@@ -192,9 +275,34 @@ function handleLightboxButtons(lightboxBtns, el, slideWrapper) {
   // Handle click outside of Carousel
   curtain.addEventListener('click', (event) => {
     event.preventDefault();
-    el.classList.remove('lightbox-active');
-    curtain.remove();
+    closeLightbox();
   }, true);
+
+  document.addEventListener('keydown', (event) => {
+    if (!el.classList.contains('lightbox-active')) return;
+
+    if (event.key === KEY_CODES.ESCAPE) {
+      closeLightbox();
+      return;
+    }
+
+    if (event.key === KEY_CODES.TAB) {
+      const focusableElements = [...el.querySelectorAll('button:not(.carousel-expand), a, input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter((elem) => !elem.closest('[aria-hidden="true"]'));
+      const firstFocusable = focusableElements[0];
+      const lastFocusable = focusableElements.at(-1);
+
+      if (event.shiftKey && document.activeElement === firstFocusable) {
+        event.preventDefault();
+        lastFocusable.focus();
+        return;
+      }
+
+      if (!event.shiftKey && document.activeElement === lastFocusable) {
+        event.preventDefault();
+        firstFocusable.focus();
+      }
+    }
+  });
 }
 
 function checkSlideForVideo(activeSlide) {
@@ -259,9 +367,10 @@ function updateAriaLive(ariaLive, slide, carouselElements) {
 function setAriaHiddenAndTabIndex({ el: block, slides }, activeEl) {
   const active = activeEl ?? block.querySelector('.carousel-slide.active');
   const activeIdx = slides.findIndex((el) => el === active);
-  const isWide = window.matchMedia('(min-width: 900px)').matches;
   const showClass = [...block.classList].find((cls) => cls.startsWith('show-'));
-  const visible = isWide && showClass ? showClass.split('-')[1] : 1;
+  const visible = (isDesktop.matches && block.matches('.ups-desktop') && slides.length)
+    || (isDesktop.matches && showClass?.split('-')[1])
+    || 1;
   const ordered = activeIdx > 0
     ? [...slides.slice(activeIdx), ...slides.slice(0, activeIdx)] : slides;
   ordered.forEach((slide, i) => {
@@ -272,9 +381,17 @@ function setAriaHiddenAndTabIndex({ el: block, slides }, activeEl) {
     });
   });
 }
+// hinting (tablet/mobile)
+function isSlideVisible(currentIdx, targetIdx, n, isNext) {
+  if (isNext) return currentIdx === targetIdx || currentIdx === (targetIdx + 1) % n;
+  const prev = (targetIdx - 1 + n) % n;
+  const next = (targetIdx + 1) % n;
+  return currentIdx === prev || currentIdx === targetIdx || currentIdx === next;
+}
 
 function moveSlides(event, carouselElements) {
   const {
+    el,
     slideContainer,
     slides,
     nextPreviousBtns,
@@ -284,13 +401,34 @@ function moveSlides(event, carouselElements) {
     ariaLive,
   } = carouselElements;
 
+  const isNext = event.currentTarget?.dataset?.toggle === 'next'
+    || event.key === KEY_CODES.ARROW_RIGHT
+    || (direction === 'left' && event.type === 'touchend');
+  if (el.classList.contains('disable-circular-nav')) {
+    const { atStart, atEnd } = getCircularNavState(carouselElements);
+    const atBoundary = isNext ? atEnd : atStart;
+    if (atBoundary) {
+      checkCircularNav(carouselElements);
+      return;
+    }
+  }
+
   ariaLive.textContent = '';
 
   let referenceSlide = slideContainer.querySelector('.reference-slide');
   let activeSlide = slideContainer.querySelector('.active');
   let activeSlideIndicator = controlsContainer.querySelector('.active');
+  let skipPause = false;
 
-  checkSlideForVideo(activeSlide);
+  // hinting-tablet / hinting-mobile
+  const isHintingMobile = (el.classList.contains('hinting-mobile') || el.classList.contains('hinting-center-mobile')) && isMobileVp.matches;
+  if (isHintingTablet(el) || isHintingMobile) {
+    const n = slides.length;
+    const currentIdx = carouselElements.currentActiveIndex;
+    const targetIdx = isNext ? (currentIdx + 1) % n : (currentIdx - 1 + n) % n;
+    skipPause = isSlideVisible(currentIdx, targetIdx, n, isNext);
+  }
+  if (!skipPause) checkSlideForVideo(activeSlide);
 
   // Track reference slide - last slide initially
   if (!referenceSlide) {
@@ -341,6 +479,16 @@ function moveSlides(event, carouselElements) {
   activeSlide.classList.add('active');
   setAriaHiddenAndTabIndex(carouselElements, activeSlide);
 
+  if (isHintingTablet(el) || isHintingMobile) {
+    const video = activeSlide?.querySelector('video');
+    /* c8 ignore start */
+    if (video?.paused && video.readyState >= 2) {
+      video.play().catch(() => {});
+      syncPausePlayIcon(video);
+    }
+    /* c8 ignore end */
+  }
+
   // Update heights dynamically for disable-button
   if (carouselElements.el.classList.contains('disable-buttons') && window.innerWidth < 900) {
     setEqualHeight(slides, slideContainer, carouselElements.currentActiveIndex);
@@ -361,6 +509,7 @@ function moveSlides(event, carouselElements) {
   if (carouselElements.el.classList.contains('disable-buttons') && window.innerWidth < 900) {
     updateButtonStates(carouselElements);
   }
+  checkCircularNav(carouselElements);
 
   /*
    * Activates slide animation.
@@ -368,7 +517,7 @@ function moveSlides(event, carouselElements) {
   */
   const slideDelay = 25;
   slideContainer.classList.remove('is-ready');
-  return setTimeout(() => slideContainer.classList.add('is-ready'), slideDelay);
+  setTimeout(() => slideContainer.classList.add('is-ready'), slideDelay);
 }
 
 export function getSwipeDistance(start, end) {
@@ -420,12 +569,24 @@ function mobileSwipeDetect(carouselElements) {
 
     // stop swipe for disabled-buttons variant.
     const activeSlideIndex = carouselElements.currentActiveIndex;
-    if (carouselElements.el.classList.contains('disable-buttons')
-          && ((activeSlideIndex === 0 && carouselElements.direction === 'right')
-          || (activeSlideIndex === slides.length - 1 && carouselElements.direction === 'left'))) {
+    const { classList } = carouselElements.el;
+    const isSwipingBack = carouselElements.direction === 'right';
+    const isSwipingForward = carouselElements.direction === 'left';
+    const isAtStart = activeSlideIndex === 0 && isSwipingBack;
+
+    if (classList.contains('disable-buttons')
+          && (isAtStart || (activeSlideIndex === slides.length - 1 && isSwipingForward))) {
       swipe.xStart = 0;
       swipe.xEnd = 0;
       return;
+    }
+    if (classList.contains('disable-circular-nav')) {
+      const { atStart, atEnd } = getCircularNavState(carouselElements);
+      if ((isSwipingBack && atStart) || (isSwipingForward && atEnd)) {
+        swipe.xStart = 0;
+        swipe.xEnd = 0;
+        return;
+      }
     }
     // reset end swipe values
     swipe.xStart = 0;
@@ -450,8 +611,15 @@ function handleChangingSlides(carouselElements) {
 
   // Handle keyboard navigation
   el.addEventListener('keydown', (event) => {
-    if (event.key === KEY_CODES.ARROW_RIGHT
-      || event.key === KEY_CODES.ARROW_LEFT) { moveSlides(event, carouselElements); }
+    const keyMap = {
+      [KEY_CODES.ARROW_LEFT]: 0, // previous
+      [KEY_CODES.ARROW_RIGHT]: 1, // next
+    };
+
+    const btnIndex = keyMap[event.key];
+    // Stop keyboard navigation for disabled-buttons variant.
+    if (btnIndex === undefined || nextPreviousBtns[btnIndex]?.disabled) return;
+    moveSlides(event, carouselElements);
   });
 
   // Swipe Events
@@ -482,7 +650,6 @@ function readySlides(slides, slideContainer, isUpsDesktop, carouselElements) {
     });
   };
 
-  const isDesktop = window.matchMedia('(min-width: 900px)');
   const setUpsOrder = () => {
     if (!isDesktop.matches) setOrder();
     else slides.forEach((slide) => { slide.style.order = ''; });
@@ -549,13 +716,6 @@ export default function init(el) {
     currentActiveIndex: 0,
   };
 
-  if (el.classList.contains('lightbox')) {
-    const lightboxBtns = decorateLightboxButtons();
-    slideWrapper.append(slideContainer, ...lightboxBtns);
-    handleLightboxButtons(lightboxBtns, el, slideWrapper);
-  } else {
-    slideWrapper.append(slideContainer);
-  }
   /*
    * Hinting center variant - Set slides order
    * before moveSlides is called for centering to work.
@@ -574,6 +734,15 @@ export default function init(el) {
   controlsContainer.append(dotsUl);
   nextPreviousContainer.append(...nextPreviousBtns, controlsContainer);
   el.append(nextPreviousContainer);
+
+  if (el.classList.contains('lightbox')) {
+    const lightboxBtns = decorateLightboxButtons();
+    el.append(lightboxBtns[1]);
+    slideWrapper.append(lightboxBtns[0], slideContainer);
+    handleLightboxButtons(lightboxBtns, el, slideWrapper);
+  } else {
+    slideWrapper.append(slideContainer);
+  }
 
   function normalizeVideoHeights() {
     const videos = el.querySelectorAll('video');
@@ -620,16 +789,19 @@ export default function init(el) {
       updateDisableButtonsHeights(carouselElements);
       updateButtonStates(carouselElements);
     }
+    checkCircularNav(carouselElements);
   });
 
   function handleDeferredHeights() {
     updateDisableButtonsHeights(carouselElements);
+    checkCircularNav(carouselElements);
   }
 
   if (el.classList.contains('disable-buttons')) {
     updateButtonStates(carouselElements);
     setTimeout(handleDeferredHeights, 1000);
   }
+  checkCircularNav(carouselElements);
 
   function handleLateLoadingNavigation() {
     [...el.querySelectorAll('.is-delayed')].forEach((item) => item.classList.remove('is-delayed'));

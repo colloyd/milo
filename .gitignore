@@ -7,7 +7,6 @@ logs/*
 .idea
 .iml
 .env
-**/mas/*/stats.json
 test-html-results/
 test-results/
 test-a11y-results/
@@ -18,3 +17,10 @@ libs/navigation/dist/
 /.claude/
 CLAUDE.md
 **/.CLAUDE.md
+
+# Font files should not be committed due to copyright & branding reasons. Use Typekit instead.
+*.otf
+*.ttf
+*.woff
+*.woff2
+*.eot

@@ -2,11 +2,13 @@
 /* eslint-disable no-underscore-dangle */
 import {
   getConfig as pageConfigHelper,
+  getCountry,
   getMetadata,
   loadScript,
   loadStyle,
-  localizeLink,
+  localizeLinkAsync,
 } from '../../utils/utils.js';
+import { getLingoActive } from '../../utils/lingo-active.js';
 import { fetchWithTimeout } from '../utils/utils.js';
 import getUuid from '../../utils/getUuid.js';
 
@@ -17,6 +19,7 @@ export const LANGS = {
   'fr-ca': 'fr-ca',
   ja: 'ja',
   ar: 'ar',
+  arabic: 'ar',
   bg: 'bg',
   cs: 'cs',
   da: 'da',
@@ -371,6 +374,8 @@ const getSortOptions = (state, strs) => {
     eventSort: 'Events: (Live, Upcoming, OnDemand)',
     titleAsc: 'Title A-Z',
     titleDesc: 'Title Z-A',
+    localFirst: 'Local Region First',
+    localLast: 'Local Region Last',
     random: 'Random',
   };
 
@@ -407,9 +412,12 @@ const alphaSort = (a, b) => {
   return 0;
 };
 
-const getLocalTitle = (tag, country, lang) => tag[`title.${lang}_${country}`]
+const getLocalTitle = (tag, country, lang) => {
+  const searchKey = `${lang}_${country}`.toLowerCase();
+  return tag[`title.${searchKey}`]
   || tag[`title.${lang}`]
   || tag.title;
+};
 
 const getFilterObj = (
   { excludeTags, filterTag, icon, openedOnLoad },
@@ -514,22 +522,251 @@ const getFilterArray = async (state, country, lang, strs) => {
   return filters;
 };
 
-export function getCountryAndLang({ autoCountryLang, country, language }) {
+const getCategoryMappings = async (state) => {
+  if (!state.categoriesMappingFile) return {};
+  const mappings = await fetch(state.categoriesMappingFile);
+  if (mappings.ok) {
+    const json = await mappings.json();
+    const data = json.data || [];
+    // Convert array to object keyed by id
+    return data.reduce((entries, entry) => {
+      entries[entry.id] = {
+        label: entry.label,
+        items: entry.items ? entry.items.split(',').map((item) => item.trim()) : [],
+      };
+      return entries;
+    }, {});
+  }
+  return {};
+};
+
+const isLocaleInRegionalSites = (regionalSites, locStr) => {
+  if (!regionalSites) return false;
+  return regionalSites
+    .split(',')
+    .map((site) => site.trim().replace(/^\//, ''))
+    .includes(locStr);
+};
+
+async function getIsLingoLocale(origin, country, language, fqdn = 'www.adobe.com') {
+  if (origin === 'news') return true;
+  const response = await fetch(`https://www.adobe.com/federal/assets/data/lingo-site-mapping.json?${fqdn}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const configJson = await response.json();
+
+  let siteId;
+  let isKnownLingoSiteLocale = false;
+  let isPermittedLingoSiteLocale = false;
+
+  const siteQueryIndexMap = configJson['site-query-index-map']?.data ?? [];
+  const siteLocalesData = configJson['site-locales']?.data ?? [];
+  try {
+    const matchedByOrigin = siteQueryIndexMap.find(({ caasOrigin }) => origin === caasOrigin);
+    if (matchedByOrigin) {
+      siteId = matchedByOrigin.uniqueSiteId;
+    }
+    isKnownLingoSiteLocale = siteLocalesData.some(({ uniqueSiteId, baseSite, regionalSites }) => {
+      if (uniqueSiteId !== siteId) return false;
+      const baseLocale = baseSite?.split('/')[1];
+      const matchesBase = country === baseLocale;
+      const langMatchesBase = language === baseLocale;
+      const matchesRegional = isLocaleInRegionalSites(regionalSites, country);
+      return matchesBase || matchesRegional || langMatchesBase;
+    });
+
+    if (isKnownLingoSiteLocale) {
+      // determine if the country is allowed to be used for the langauge
+      const baseSiteLocale = language === 'en' ? '' : language;
+      const altLocale = `${country}_${language}`;
+      siteLocalesData
+        .filter(({ uniqueSiteId }) => uniqueSiteId === siteId)
+        .forEach(({ baseSite, regionalSites }) => {
+          if (baseSiteLocale === baseSite || baseSiteLocale === baseSite.split('/')[1]) {
+            const regionalMap = regionalSites.split(',').map((site) => site.trim().replace(/^\//, ''));
+            if (country === 'xx' || regionalMap.includes(country) || regionalMap.includes(altLocale)) {
+              isPermittedLingoSiteLocale = true;
+            }
+          }
+        });
+    }
+  } catch (e) {
+    window.lana?.log('Failed to load lingo-site-mapping.json:', e);
+  }
+  return isPermittedLingoSiteLocale;
+}
+
+async function getLangFirstParam(origin, country, language) {
+  const fqdn = window.location.hostname;
+  const isLingoLocale = await getIsLingoLocale(origin, country, language, fqdn);
+  // if it's not a lingo locale, check if you're on a base site.
+  if (!isLingoLocale && country !== 'xx') {
+    return false;
+  }
+  return true;
+}
+
+async function getLingoSiteLocale(origin, path, fqdn = 'www.adobe.com') {
+  const host = origin.toLowerCase();
+  let lingoSiteMapping = {
+    country: 'xx',
+    language: 'en',
+  };
+
+  // Extract pathname from URL if path includes domain
+  let pathname = path;
+  if (path.includes('://') || !path.startsWith('/')) {
+    try {
+      const url = new URL(path.startsWith('http') ? path : `https://${path}`);
+      pathname = url.pathname;
+    } catch (e) {
+      // If it doesn't start with /, try to extract pathname manually
+      if (!path.startsWith('/')) {
+        const pathParts = path.split('/');
+        // Remove domain part (first element)
+        pathname = `/${pathParts.slice(1).join('/')}`;
+      }
+    }
+  }
+  const localeStr = pathname.split('/')[1];
+
+  try {
+    let siteId;
+    const response = await fetch(`https://www.adobe.com/federal/assets/data/lingo-site-mapping.json?${fqdn}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const configJson = await response.json();
+
+    const siteQueryIndexMap = configJson['site-query-index-map']?.data ?? [];
+    const siteLocalesData = configJson['site-locales']?.data ?? [];
+
+    // Map origin (caasOrigin) to uniqueSiteId for locale lookup
+    const matchedByOrigin = siteQueryIndexMap.find(({ caasOrigin }) => host === caasOrigin);
+    if (matchedByOrigin) {
+      siteId = matchedByOrigin.uniqueSiteId;
+    }
+    // check if the localeStr is in the baseSite or regionalSites.
+    // if not, use the og country/language logic
+    if (!siteLocalesData.some(({ uniqueSiteId, baseSite, regionalSites }) => uniqueSiteId === siteId && (localeStr === baseSite.split('/')[1] || isLocaleInRegionalSites(regionalSites, localeStr)))) {
+      const locale = LOCALES[localeStr]?.ietf || 'en-US';
+      /* eslint-disable-next-line prefer-const */
+      let [currLang, currCountry] = locale.split('-');
+      return {
+        country: currCountry,
+        language: currLang,
+      };
+    }
+
+    siteLocalesData
+      .filter(({ uniqueSiteId }) => uniqueSiteId === siteId)
+      .forEach(({ baseSite, regionalSites }) => {
+        if (localeStr === baseSite.split('/')[1]) {
+          lingoSiteMapping = {
+            country: 'xx',
+            language: baseSite.split('/')[1],
+          };
+          return;
+        }
+        if (isLocaleInRegionalSites(regionalSites, localeStr)) {
+          if (baseSite === '/') {
+            lingoSiteMapping = {
+              country: localeStr,
+              language: 'en',
+            };
+          }
+          lingoSiteMapping = {
+            country: localeStr,
+            language: baseSite.split('/')[1],
+          };
+        }
+      });
+    return lingoSiteMapping;
+  } catch (e) {
+    window.lana?.log(`Failed to load lingo-site-mapping.json: ${e}`, {
+      tags: 'caas',
+      severity: 'error',
+    });
+  }
+  return lingoSiteMapping;
+}
+
+export const getLanguageFirstCountryAndLang = async (path, origin, fqdn) => {
+  const localeArr = path.split('/');
+  let langStr = 'en';
+  let countryStr = 'xx';
+  if (origin.toLowerCase() === 'news') {
+    langStr = LANGS[localeArr[1]] ?? LANGS[''] ?? 'en';
+    countryStr = LOCALES[localeArr[2]] ?? 'xx';
+    if (typeof countryStr === 'object') {
+      countryStr = countryStr.ietf?.split('-')[1] ?? 'xx';
+    }
+  } else {
+    const mapping = await getLingoSiteLocale(origin, path, fqdn);
+    countryStr = LOCALES[mapping.country.toLowerCase()] ?? 'xx';
+    if (typeof countryStr === 'object') {
+      countryStr = countryStr.ietf?.split('-')[1] ?? 'xx';
+    }
+    langStr = mapping.language ?? 'en';
+  }
+  return {
+    country: countryStr.toLowerCase(),
+    lang: langStr.toLowerCase(),
+  };
+};
+
+export async function getCountryAndLang({ autoCountryLang, country, language, source }) {
   const locales = getMetadata('caas-locales') || '';
-  const langFirst = getMetadata('langfirst');
+  const langFirst = await getLingoActive();
+  let geoCountry = null;
   /* if it is a language first localized page don't use the milo locales.
     This can be changed after lang-first localization is supported from the milo utils */
   if (langFirst && autoCountryLang) {
     const pathArr = pageConfigHelper()?.pathname?.split('/') || [];
-    const langStr = LANGS[pathArr[1]] ?? LANGS[''] ?? 'en';
+    let langStr = LANGS[pathArr[1]] ?? LANGS[''] ?? 'en';
     let countryStr = LOCALES[pathArr[2]] ?? 'xx';
-    if (typeof countryStr === 'object') {
+
+    let fallbackCountry = countryStr;
+    const fallbackLang = langStr;
+    if (typeof fallbackCountry === 'object') {
+      fallbackCountry = fallbackCountry.ietf?.split('-')[1] ?? 'xx';
+    }
+
+    const isNewsSource = Array.from([source].flat()).some((s) => s?.toLowerCase().includes('news'));
+
+    if (!isNewsSource) {
+      const primeSource = Array.from([source].flat())[0];
+      const pathname = pageConfigHelper()?.pathname || window.location.pathname;
+      const fqdn = window.location.hostname;
+      const mapping = await getLanguageFirstCountryAndLang(pathname, primeSource, fqdn);
+
+      countryStr = mapping.country || fallbackCountry;
+      langStr = mapping.lang || fallbackLang;
+
+      if (countryStr === 'xx') {
+        try {
+          geoCountry = await getCountry(true)
+            || pageConfigHelper().mep?.countryIP;
+
+          if (!geoCountry) {
+            geoCountry = await getCountry();
+          }
+
+          if (geoCountry) {
+            const isLingoLocale = await getIsLingoLocale(primeSource, geoCountry, langStr, fqdn);
+            if (isLingoLocale) countryStr = geoCountry.toLowerCase();
+          }
+        } catch (error) {
+          window?.lana?.log(`GEO IP lookup failed, fallback to URL path. ${error}`, { tags: 'caas,geo-ip' });
+        }
+      }
+    }
+
+    if (isNewsSource && typeof countryStr === 'object') {
       countryStr = countryStr.ietf?.split('-')[1] ?? 'xx';
     }
 
     return {
       country: countryStr,
       language: langStr,
+      geoCountry,
       locales,
     };
   }
@@ -542,12 +779,14 @@ export function getCountryAndLang({ autoCountryLang, country, language }) {
     return {
       country: currCountry,
       language: currLang,
+      geoCountry,
       locales,
     };
   }
   return {
     country: country ? country.split('/').pop() : 'US',
     language: language ? language.split('/').pop() : 'en',
+    geoCountry,
     locales,
   };
 }
@@ -610,8 +849,7 @@ const fetchUuidForCard = async (card) => {
     return card.contentId;
   }
   try {
-    const url = new URL(card.contentId);
-    const localizedLink = localizeLink(url, null, true);
+    const localizedLink = await localizeLinkAsync(card.contentId, null, true);
     const substr = String(localizedLink).split('https://').pop();
     return await getUuid(substr);
   } catch (error) {
@@ -685,7 +923,7 @@ export const getGrayboxExperienceId = (
 export const getConfig = async (originalState, strs = {}) => {
   const state = addMissingStateProps(originalState);
   const originSelection = Array.isArray(state.source) ? state.source.join(',') : state.source;
-  const { country, language, locales } = getCountryAndLang(state);
+  const { country, language, locales, geoCountry } = await getCountryAndLang(state);
   const featuredCards = state.featuredCards ? await getCardsString(state.featuredCards) : '';
   const excludedCards = state.excludedCards && state.excludedCards.reduce(getContentIdStr, '');
   const hideCtaIds = state.hideCtaIds ? state.hideCtaIds.reduce(getContentIdStr, '') : '';
@@ -706,8 +944,44 @@ export const getConfig = async (originalState, strs = {}) => {
 
   const grayboxExperienceId = getGrayboxExperienceId();
   const grayboxExperienceParam = grayboxExperienceId ? `&gbExperienceID=${grayboxExperienceId}` : '';
+  const geoCountryParam = geoCountry ? `&geoCountry=${geoCountry}` : '';
 
-  const langFirst = state.langFirst ? `&langFirst=${state.langFirst}` : '';
+  const isLingoActive = await getLingoActive();
+  let isLingoSite = false;
+  if (isLingoActive) {
+    isLingoSite = await getLangFirstParam(originSelection.split(',')[0], country, language);
+  }
+  // handle news source separately as it is not a lingo site
+  if (originSelection?.toLowerCase().includes('news') && isLingoActive) {
+    isLingoSite = 'true';
+  }
+  const getLingoResults = (isLingoActive && isLingoSite) ? 'true' : 'false';
+  const langFirst = state.langFirst ? `&langFirst=${getLingoResults}` : '';
+
+  const navigationStyle = state.container === 'carousel'
+    && state.paginationAnimationStyle.includes('Modern')
+    && state.useLightControls
+    ? `${state.paginationAnimationStyle}-light`
+    : state.paginationAnimationStyle;
+
+  const currentPage = `${window.location.hostname}${window.location.pathname}`;
+  let currentPageUuid = null;
+  try {
+    currentPageUuid = await getUuid(currentPage);
+  } catch (error) {
+    window.lana?.log(`Could not get UUID for current page: ${currentPage}`, error);
+  }
+
+  let excludedCardsWithCurrent;
+  if (currentPageUuid) {
+    if (excludedCards) {
+      excludedCardsWithCurrent = `${excludedCards}%2C${currentPageUuid}`;
+    } else {
+      excludedCardsWithCurrent = currentPageUuid;
+    }
+  } else {
+    excludedCardsWithCurrent = excludedCards;
+  }
 
   const config = {
     collection: {
@@ -730,10 +1004,11 @@ export const getConfig = async (originalState, strs = {}) => {
       }&language=${language
       }&country=${country
       }&complexQuery=${complexQuery
-      }&excludeIds=${excludedCards
+      }&excludeIds=${excludedCardsWithCurrent
       }&currentEntityId=&featuredCards=${featuredCards
       }&environment=&draft=${state.draftDb
       }&size=${state.collectionSize || state.totalCardsToShow
+      }${geoCountryParam
       }${localesQueryParam
       }${debug
       }${flatFile
@@ -765,6 +1040,7 @@ export const getConfig = async (originalState, strs = {}) => {
       setCardBorders: state.setCardBorders,
       showFooterDivider: state.showFooterDivider,
       useOverlayLinks: state.useOverlayLinks,
+      useCenterVideoPlay: state.useCenterVideoPlay,
       partialLoadWithBackgroundFetch: {
         enabled: state.partialLoadEnabled,
         partialLoadCount: state.partialLoadCount,
@@ -796,6 +1072,9 @@ export const getConfig = async (originalState, strs = {}) => {
           transparent: !!state.bladeCardTransparent,
         },
       }),
+      // Include editorialOpenVariant if necessary
+      ...((state.cardStyle === 'editorial-card' && state.editorialCardOpenVariant)
+        && { editorialOpenVariant: !!state.editorialCardOpenVariant }),
     },
     hideCtaIds: hideCtaIds.split(URL_ENCODED_COMMA),
     hideCtaTags,
@@ -808,6 +1087,7 @@ export const getConfig = async (originalState, strs = {}) => {
       filters: await getFilterArray(state, country, language, strs),
       categories: await getCategoryArray(state, country, language),
       filterLogic: state.filterLogic,
+      categoryMappings: await getCategoryMappings(state) || {},
       i18n: {
         leftPanel: {
           header: strs.filterLeftPanel || 'Refine Your Results',
@@ -850,7 +1130,7 @@ export const getConfig = async (originalState, strs = {}) => {
       options: getSortOptions(state, strs),
     },
     pagination: {
-      animationStyle: state.paginationAnimationStyle,
+      animationStyle: navigationStyle,
       enabled: state.paginationEnabled,
       resultsQuantityShown: state.paginationQuantityShown,
       loadMoreButton: {
@@ -915,7 +1195,6 @@ export const getConfig = async (originalState, strs = {}) => {
     linkTransformer: pageConfig.caasLinkTransformer || stageMapToCaasTransforms(pageConfig),
     headers: caasRequestHeaders,
   };
-
   return config;
 };
 
@@ -973,6 +1252,7 @@ export const defaultState = {
   filterBuildPanel: 'automatic',
   filterLocation: 'left',
   filterLogic: 'or',
+  categoriesMappingFile: '',
   filters: [],
   filtersCustom: [],
   filtersShowEmpty: false,
@@ -1034,6 +1314,7 @@ export const defaultState = {
   totalCardsToShow: 10,
   useLightText: false,
   useOverlayLinks: false,
+  useCenterVideoPlay: false,
   collectionButtonStyle: 'primary',
   userInfo: [],
 };

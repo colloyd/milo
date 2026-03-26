@@ -80,6 +80,8 @@ const defaultOptions = {
     'horizontal-card': 'Horizontal Card',
     'custom-card': 'Custom Card',
     'blade-card': 'Blade Card',
+    'editorial-card': 'Editorial Card',
+    'blog-card': 'Blog Card',
   },
   collectionBtnStyle: {
     primary: 'Primary',
@@ -149,7 +151,6 @@ const defaultOptions = {
     OR: 'OR',
   },
   layoutType: {
-    // '1up': '1up',
     '2up': '2up',
     '3up': '3up',
     '4up': '4up',
@@ -160,8 +161,10 @@ const defaultOptions = {
     'over-background': 'Over Background',
   },
   paginationAnimationStyle: {
-    paged: 'Paged',
-    incremental: 'Incremental',
+    pagedModern: 'Modern (Paged)',
+    incrementalModern: 'Modern (Incremental)',
+    paged: 'Classic (Paged)',
+    incremental: 'Classic (Incremental)',
   },
   paginationType: {
     paginator: 'Paginator',
@@ -183,6 +186,8 @@ const defaultOptions = {
     eventSort: 'Events: (Live, Upcoming, OnDemand)',
     titleAsc: 'Title: (A - Z)',
     titleDesc: 'Title: (Z - A)',
+    localFirst: 'Local Region First',
+    localLast: 'Local Region Last',
     random: 'Random',
   },
   source: {
@@ -198,6 +203,7 @@ const defaultOptions = {
     workfront: 'Workfront',
     'bacom-blog': 'Bacom Blog',
     news: 'Newsroom',
+    'adobe-blog': 'Adobe Blog',
   },
   tagsUrl: 'https://www.adobe.com/chimera-api/tags',
   titleHeadingLevel: {
@@ -379,6 +385,23 @@ const UiPanel = () => {
     </div>
   `;
 
+  const carouselOptions = html`
+    <div class="carousel-options">
+      <${Select}
+        label="Carousel Controls Options"
+        prop="paginationAnimationStyle"
+        options=${defaultOptions.paginationAnimationStyle}
+      />
+      <${Input} label="Light background (Modern only)" prop="useLightControls" type="checkbox" />
+    </div>
+  `;
+
+  const editorialCardOptions = html`
+    <div class="nested">
+      <${Input} label="Editorial Open variant" prop="editorialCardOpenVariant" type="checkbox" />
+    </div>
+  `;
+
   return html`
     <${Input} label="Show Total Count" prop="showTotalResults" type="checkbox" />
     <${Input} label="Show Card Borders" prop="setCardBorders" type="checkbox" />
@@ -387,12 +410,15 @@ const UiPanel = () => {
     <${Input} label="Show Different CTA for Live Events" prop="dynamicCTAForLiveEvents" type="checkbox" />
     <${Input} label="Hide Date for On-Demand Content" prop="hideDateInterval" type="checkbox" />
     <${Input} label="Hide Card Banners" prop="disableBanners" type="checkbox" />
+    <${Input} label="Use Center Video Play Button" prop="useCenterVideoPlay" type="checkbox" />
     <${Input} label="Use Overlay Links" prop="useOverlayLinks" type="checkbox" />
     <${Input} label="Use Light Text" prop="useLightText" type="checkbox" />
     <${Select} label="Card Style" prop="cardStyle" options=${defaultOptions.cardStyle} />
       ${state.cardStyle === 'blade-card' && bladeCardOptions}
+      ${state.cardStyle === 'editorial-card' && editorialCardOptions}
     <${Select} options=${defaultOptions.cardTitleAccessibilityLevel} prop="cardTitleAccessibilityLevel" label="Card Accessibility Title Level" />
     <${Select} label="Layout" prop="container" options=${defaultOptions.container} />
+      ${state.container === 'carousel' && carouselOptions}
     <${Select} label="Layout Type" prop="layoutType" options=${defaultOptions.layoutType} />
     <${Select} label="Grid Gap (Gutter)" prop="gutter" options=${defaultOptions.gutter} />
     <${Select} label="Theme" prop="theme" options=${defaultOptions.theme} />
@@ -569,6 +595,8 @@ const SortPanel = () => {
       <${Input} label="Events" prop="sortEventSort" type="checkbox" />
       <${Input} label="Title A-Z" prop="sortTitleAsc" type="checkbox" />
       <${Input} label="Title Z-A" prop="sortTitleDesc" type="checkbox" />
+      <${Input} label="Local Region First" prop="sortLocalFirst" type="checkbox" />
+      <${Input} label="Local Region Last" prop="sortLocalLast" type="checkbox" />
       <${Input} label="Random" prop="sortRandom" type="checkbox" />
     </div>
 
@@ -602,7 +630,10 @@ const FilterPanel = ({ tagsData }) => {
     <${Select} label="Filter Location" prop="filterLocation" options=${defaultOptions.filterLocation} />
     <${Select} label="Filter logic within each tag panel" prop="filterLogic" options=${defaultOptions.filterLogic} />
     <${Select} label="Automatic or Custom Panel" prop="filterBuildPanel" options=${defaultOptions.filterBuildPanel} />
-  `;
+    <${Input} label="Categories mapping file (optional)" type="text" 
+      prop="categoriesMappingFile"
+      value=${context.state.categoriesMappingFile}/>
+    `;
 
   const FilterBuildPanel = html`
     <${FilterOptions}>
@@ -683,11 +714,6 @@ const PaginationPanel = () => {
       label="Pagination Type"
       prop="paginationType"
       options=${defaultOptions.paginationType}
-    />
-    <${Select}
-      label="Carousel Animation Style"
-      prop="paginationAnimationStyle"
-      options=${defaultOptions.paginationAnimationStyle}
     />
     <${Input} label="Use Theme 3" prop="paginationUseTheme3" type="checkbox" />
   `;

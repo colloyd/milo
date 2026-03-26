@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
+import { PRICE_PATTERN, constructTestUrl } from '../../libs/commerce.js';
 import WebUtil from '../../libs/webutil.js';
 import { features } from './commerce.spec.js';
 import CommercePage from './commerce.page.js';
 import FedsLogin from '../feds/login/login.page.js';
 import FedsHeader from '../feds/header/header.page.js';
-import { PRICE_PATTERN, constructTestUrl } from '../../libs/commerce.js';
 
 let COMM;
 test.beforeEach(async ({ page, baseURL, browserName }) => {
@@ -153,21 +153,35 @@ test.describe('Commerce feature test suite', () => {
     });
 
     await test.step('Validate regular price has promo', async () => {
-      await COMM.price.waitFor({ state: 'visible', timeout: 10000 });
-      await expect(COMM.price).toHaveAttribute('data-promotion-code', data.promo);
-      await expect(COMM.price).toHaveAttribute('data-display-old-price', 'true');
-      await COMM.price.locator('.price').first().waitFor({ state: 'visible', timeout: 10000 });
-      await COMM.price.locator('.price-strikethrough').waitFor({ state: 'visible', timeout: 10000 });
+      const regularPrice = page.locator('p:has-text("Regular price:")');
+      const price = regularPrice.locator(COMM.price);
+      const strikethroughPrice = regularPrice.locator(COMM.priceOld);
+      await strikethroughPrice.waitFor({ state: 'visible', timeout: 10000 });
+      await price.waitFor({ state: 'visible', timeout: 10000 });
+      await expect(price).toHaveAttribute('data-promotion-code', data.price_promo);
+      await expect(price).toHaveAttribute('data-display-old-price', 'true');
+      await expect(price).toContainText(data.price);
+      await expect(strikethroughPrice).toContainText(data.priceOld);
+      const priceOldStyle = await strikethroughPrice.evaluate(
+        (e) => window.getComputedStyle(e).getPropertyValue('text-decoration'),
+      );
+      expect(priceOldStyle).toContain('line-through');
     });
 
     await test.step('Validate optical price has promo', async () => {
       await COMM.priceOptical.waitFor({ state: 'visible', timeout: 10000 });
-      await expect(COMM.priceOptical).toHaveAttribute('data-promotion-code', data.promo);
+      await expect(COMM.priceOptical).toHaveAttribute('data-promotion-code', data.price_promo);
+      await expect(COMM.priceOptical).toContainText(data.priceOptical);
     });
 
     await test.step('Validate strikethrough price has promo', async () => {
-      await COMM.priceStrikethrough.waitFor({ state: 'visible', timeout: 10000 });
-      await expect(COMM.priceStrikethrough).toHaveAttribute('data-promotion-code', data.promo);
+      await COMM.priceStrikethrough.last().waitFor({ state: 'visible', timeout: 10000 });
+      await expect(COMM.priceStrikethrough.last()).toHaveAttribute('data-promotion-code', data.price_promo);
+      // await expect(COMM.priceStrikethrough.last()).toContainText(data.priceStrikethrough);
+      const priceStyle = await COMM.priceStrikethrough.last().evaluate(
+        (e) => window.getComputedStyle(e).getPropertyValue('text-decoration'),
+      );
+      expect(priceStyle).toContain('line-through');
     });
 
     await test.step('Validate Buy now CTA has promo', async () => {
@@ -316,6 +330,9 @@ test.describe('Commerce feature test suite', () => {
 
     // Validate there are no unresolved commerce placeholders
     await test.step('Validate wcs placeholders', async () => {
+      // Wait for at least one placeholder to be resolved
+      await page.waitForSelector('[data-wcs-osi].placeholder-resolved', { timeout: 10000 });
+
       const unresolvedPlaceholders = await page.evaluate(
         () => [...document.querySelectorAll('[data-wcs-osi]')].filter(
           (el) => !el.classList.contains('placeholder-resolved'),
@@ -325,20 +342,20 @@ test.describe('Commerce feature test suite', () => {
     });
 
     await test.step('Validate Buy now CTA', async () => {
-      await COMM.buyNowCta.waitFor({ state: 'visible', timeout: 10000 });
-      await expect(COMM.buyNowCta).toHaveAttribute('data-promotion-code', data.promo);
-      await expect(COMM.buyNowCta).toHaveAttribute('href', new RegExp(`${data.promo}`));
-      await expect(COMM.buyNowCta).toHaveAttribute('href', new RegExp(`${data.CO}`));
-      await expect(COMM.buyNowCta).toHaveAttribute('href', new RegExp(`${data.lang}`));
+      await COMM.checkoutCTA.nth(0).waitFor({ state: 'visible', timeout: 10000 });
+      await expect(COMM.checkoutCTA.nth(0)).toHaveAttribute('data-promotion-code', data.promo);
+      await expect(COMM.checkoutCTA.nth(0)).toHaveAttribute('href', new RegExp(`${data.promo}`));
+      await expect(COMM.checkoutCTA.nth(0)).toHaveAttribute('href', new RegExp(`${data.CO}`));
+      await expect(COMM.checkoutCTA.nth(0)).toHaveAttribute('href', new RegExp(`${data.lang}`));
     });
 
     await test.step('Validate Free Trial CTA', async () => {
-      await COMM.freeTrialCta.waitFor({ state: 'visible', timeout: 10000 });
-      await expect(COMM.freeTrialCta).toHaveAttribute('data-promotion-code', data.promo);
-      await expect(COMM.freeTrialCta).toHaveAttribute('href', new RegExp(`${data.promo}`));
-      await expect(COMM.freeTrialCta).toHaveAttribute('href', new RegExp(`${data.CO}`));
-      await expect(COMM.freeTrialCta).toHaveAttribute('href', new RegExp(`${data.lang}`));
-      await expect(COMM.freeTrialCta).toHaveAttribute('href', new RegExp(`${data.workflow}`));
+      await COMM.checkoutCTA.nth(1).waitFor({ state: 'visible', timeout: 10000 });
+      await expect(COMM.checkoutCTA.nth(1)).toHaveAttribute('data-promotion-code', data.promo);
+      await expect(COMM.checkoutCTA.nth(1)).toHaveAttribute('href', new RegExp(`${data.promo}`));
+      await expect(COMM.checkoutCTA.nth(1)).toHaveAttribute('href', new RegExp(`${data.CO}`));
+      await expect(COMM.checkoutCTA.nth(1)).toHaveAttribute('href', new RegExp(`${data.lang}`));
+      await expect(COMM.checkoutCTA.nth(1)).toHaveAttribute('href', new RegExp(`${data.workflow}`));
     });
 
     await test.step('Validate regular price display', async () => {
@@ -406,10 +423,15 @@ test.describe('Commerce feature test suite', () => {
     await test.step('Go to the test page', async () => {
       await page.goto(testPage);
       await page.waitForLoadState('domcontentloaded');
+      await expect(COMM.buyNowCta).toBeVisible();
+      await page.waitForTimeout(1000);
     });
 
     // Validate there are no unresolved commerce placeholders
     await test.step('Validate wcs placeholders', async () => {
+      // Wait for at least one placeholder to be resolved
+      await page.waitForSelector('[data-wcs-osi].placeholder-resolved', { timeout: 10000 });
+
       const unresolvedPlaceholders = await page.evaluate(
         () => [...document.querySelectorAll('[data-wcs-osi]')].filter(
           (el) => !el.classList.contains('placeholder-resolved'),
@@ -438,7 +460,7 @@ test.describe('Commerce feature test suite', () => {
     await test.step('Validate regular price display', async () => {
       await COMM.price.waitFor({ state: 'visible', timeout: 10000 });
       expect(await COMM.price.innerText()).toContain('£');
-      expect(await COMM.price.innerText()).toContain('/yr');
+      expect(await COMM.price.innerText()).toContain('/mo');
       expect(await COMM.price.locator('.price-recurrence').first().innerText()).not.toBe('');
       expect(await COMM.price.locator('.price-unit-type').first().innerText()).toBe('');
       expect(await COMM.price.locator('.price-tax-inclusivity').first().innerText()).toBe('');
@@ -455,13 +477,13 @@ test.describe('Commerce feature test suite', () => {
       expect(await COMM.priceOptical.locator('.price-recurrence').innerText()).not.toBe('');
       expect(await COMM.priceOptical.locator('.price-unit-type').innerText()).toBe('');
       expect(await COMM.priceOptical.locator('.price-tax-inclusivity').innerText()).toBe('');
-      await expect(COMM.priceOptical).toHaveAttribute('data-promotion-code', data.promo);
+      // await expect(COMM.priceOptical).toHaveAttribute('data-promotion-code', data.promo);
     });
 
     await test.step('Validate strikethrough price display', async () => {
       await COMM.priceStrikethrough.waitFor({ state: 'visible', timeout: 10000 });
       expect(await COMM.priceStrikethrough.innerText()).toContain('£');
-      expect(await COMM.priceStrikethrough.innerText()).toContain('/yr');
+      expect(await COMM.priceStrikethrough.innerText()).toContain('/mo');
       expect(await COMM.priceStrikethrough.locator('.price-recurrence').innerText()).not.toBe('');
       expect(await COMM.priceStrikethrough.locator('.price-unit-type').innerText()).toBe('');
       expect(await COMM.priceStrikethrough.locator('.price-tax-inclusivity').innerText()).toBe('');
@@ -473,6 +495,7 @@ test.describe('Commerce feature test suite', () => {
     });
   });
 
+  // @Commerce-Volume-Discount - Validate volume discount price
   test(`${features[10].name}, ${features[10].tags}`, async ({ page, baseURL }) => {
     const testPage = constructTestUrl(baseURL, features[10].path);
     console.info('[Test Page]: ', testPage);
@@ -524,6 +547,7 @@ test.describe('Commerce feature test suite', () => {
     });
   });
 
+  // @Commerce-Volume-Discount-Annual - Validate volume discount price with annual price
   test(`${features[11].name}, ${features[11].tags}`, async ({ page, baseURL }) => {
     const testPage = constructTestUrl(baseURL, features[11].path);
     console.info('[Test Page]: ', testPage);

@@ -26,6 +26,7 @@ const MILO_BLOCKS = [
   'carousel',
   'chart',
   'columns',
+  'comparison-table',
   'editorial-card',
   'email-collection',
   'faas',
@@ -46,10 +47,12 @@ const MILO_BLOCKS = [
   'iframe',
   'instagram',
   'language-selector',
+  'language-banner',
   'locui',
   'locui-create',
   'm7',
   'marketo',
+  'marketo-config',
   'marquee',
   'marquee-anchors',
   'martech-metadata',
@@ -57,7 +60,6 @@ const MILO_BLOCKS = [
   'merch',
   'merch-card',
   'merch-card-autoblock',
-  'merch-card-collection',
   'merch-card-collection-autoblock',
   'merch-offers',
   'mmm',
@@ -77,6 +79,7 @@ const MILO_BLOCKS = [
   'slideshare',
   'preflight',
   'promo',
+  'quick-facts',
   'quiz',
   'quiz-entry',
   'quiz-marquee',
@@ -160,17 +163,26 @@ const TARGET_TIMEOUT_MS = 4000;
 const LANGSTORE = 'langstore';
 const PREVIEW = 'target-preview';
 const PAGE_URL = new URL(window.location.href);
+// TODO remove LANGUAGE_BASED_PATHS once news.adobe.com is using new langFirst site structure
 const LANGUAGE_BASED_PATHS = [
   // don't add milo too. It's a special case because of tools, merch, etc.
   'news.adobe.com',
 ];
 const DEFAULT_LANG = 'en';
-export const SLD = PAGE_URL.hostname.includes('.aem.') ? 'aem' : 'hlx';
+export const SLD = 'aem';
 
 const PROMO_PARAM = 'promo';
 let isMartechLoaded = false;
 
 let langConfig;
+const queryIndexes = {};
+let baseQueryIndex;
+let lingoSiteMapping;
+let lingoSiteMappingLoaded;
+let isLoadingQueryIndexes = false;
+let siteQueryIndexMapLingo = [];
+
+const parseList = (str) => str.split(/[\n,]+/).map((t) => t.trim()).filter(Boolean);
 
 export function getEnv(conf) {
   const { host } = window.location;
@@ -195,24 +207,56 @@ export function getEnv(conf) {
   /* c8 ignore stop */
 }
 
-export function getLocale(locales, pathname = window.location.pathname) {
-  if (!locales) {
-    return { ietf: 'en-US', tk: 'hah7vzn.css', prefix: '' };
+function hydrateLocale(locales, key) {
+  const locale = locales[key];
+
+  const buildExpandedLocale = (localeData, localeKey) => ({
+    ...localeData,
+    prefix: localeKey ? `/${localeKey}` : '',
+    region: localeData.region || localeKey.split('_')[0] || 'us',
+  });
+
+  const isBaseLocale = !('base' in locale);
+  if (isBaseLocale) {
+    const hydratedChildren = Object.entries(locales)
+      .filter(([, childLocale]) => childLocale.base === key)
+      .reduce((acc, [childKey, childLocale]) => {
+        const mergedLocale = { ...locale, ...childLocale, base: childLocale.base };
+        acc[childKey] = buildExpandedLocale(mergedLocale, childKey);
+        return acc;
+      }, {});
+
+    const hydratedBase = buildExpandedLocale(locale, key);
+    return { ...hydratedBase, regions: hydratedChildren };
   }
+
+  const hasValidBase = 'base' in locale && locales[locale.base] !== undefined;
+  if (hasValidBase) {
+    const baseLocale = locales[locale.base];
+    const mergedLocale = { ...baseLocale, ...locale };
+    return buildExpandedLocale(mergedLocale, key);
+  }
+
+  return { ...locale };
+}
+
+export function getLocale(locales, pathname = window.location.pathname) {
+  if (!locales) return { ietf: 'en-US', tk: 'hah7vzn.css', prefix: '' };
+
   const split = pathname.split('/');
   const localeString = split[1];
-  let locale = locales[localeString] || locales[''];
-  if ([LANGSTORE, PREVIEW].includes(localeString)) {
-    const ietf = Object.keys(locales).find((loc) => locales[loc]?.ietf?.startsWith(split[2]));
-    if (ietf) locale = locales[ietf];
-    const pathSegment = split[2] ? `/${split[2]}` : '';
-    locale.prefix = `/${localeString}${pathSegment}`;
-    return locale;
+  const specialPrefix = [LANGSTORE, PREVIEW].includes(localeString) ? localeString : '';
+  const ietfSegment = split[2];
+
+  let matchedKey = '';
+  if (specialPrefix) {
+    matchedKey = Object.keys(locales).find((key) => locales[key]?.ietf?.startsWith(ietfSegment)) ?? '';
+  } else if (localeString in locales) {
+    matchedKey = localeString;
   }
-  const isUS = locale.ietf === 'en-US';
-  const localePathPrefix = localeString ? `/${localeString}` : '';
-  locale.prefix = isUS ? '' : localePathPrefix;
-  locale.region = isUS ? 'us' : localeString.split('_')[0];
+
+  const locale = hydrateLocale(locales, matchedKey);
+  if (specialPrefix) locale.prefix = `/${specialPrefix}${ietfSegment ? `/${ietfSegment}` : ''}`;
   return locale;
 }
 
@@ -223,7 +267,7 @@ export function getLanguage(languages, locales, pathname = window.location.pathn
   const region = split[locOffset + 2];
   let regionPath = '';
 
-  const language = languages[languageString];
+  const language = languages?.[languageString];
   if (language && region && language.regions) {
     const [matchingRegion] = language.regions.filter((r) => r.region === region);
     if (matchingRegion?.region) language.region = matchingRegion.region;
@@ -236,7 +280,7 @@ export function getLanguage(languages, locales, pathname = window.location.pathn
     || (language.languageBased === false && !language.region);
   if (isLegacyLocaleRoutingMode) {
     const locale = getLocale(locales, pathname);
-    const englishLang = languages.en;
+    const englishLang = languages?.en;
     if (locale.prefix === '' && englishLang) {
       locale.language = DEFAULT_LANG;
       if (englishLang.region) locale.region = englishLang.region;
@@ -250,6 +294,13 @@ export function getLanguage(languages, locales, pathname = window.location.pathn
   language.language = languageString;
   language.prefix = `${languageString === DEFAULT_LANG && !regionPath ? '' : '/'}${languageString}${regionPath}`;
   return language;
+}
+
+export function setInternational(prefix) {
+  const domain = window.location.host.endsWith('.adobe.com') ? 'domain=adobe.com' : '';
+  const maxAge = 365 * 24 * 60 * 60; // max-age in seconds for 365 days
+  document.cookie = `international=${prefix};max-age=${maxAge};path=/;${domain}`;
+  sessionStorage.setItem('international', prefix);
 }
 
 export function getMetadata(name, doc = document) {
@@ -317,6 +368,7 @@ export const [setConfig, updateConfig, getConfig] = (() => {
       config.entitlements = handleEntitlements;
       config.consumerEntitlements = conf.entitlements || [];
       setupMiloObj(config);
+
       return config;
     },
     (conf) => (config = conf),
@@ -336,6 +388,10 @@ export const getFederatedContentRoot = () => {
     'https://news.adobe.com',
     'graybox.adobe.com',
   ];
+  const fedContFromMiloDomain = [
+    'https://acrobat.adobe.com',
+    'https://stage.acrobat.adobe.com',
+  ];
   const { allowedOrigins = [], origin: configOrigin } = getConfig();
   if (federatedContentRoot) return federatedContentRoot;
   // Non milo consumers will have its origin from config
@@ -347,8 +403,8 @@ export const getFederatedContentRoot = () => {
       ? originNoStage === o
       : originNoStage.endsWith(o);
   });
-
-  federatedContentRoot = isAllowedOrigin ? origin : 'https://www.adobe.com';
+  if (fedContFromMiloDomain.includes(window.location.origin)) federatedContentRoot = 'https://milo.adobe.com';
+  else federatedContentRoot = isAllowedOrigin ? origin : 'https://www.adobe.com';
 
   if (origin.includes('localhost') || origin.includes(`.${SLD}.`)) {
     federatedContentRoot = `https://main--federal--adobecom.aem.${origin.endsWith('.live') ? 'live' : 'page'}`;
@@ -357,8 +413,6 @@ export const getFederatedContentRoot = () => {
   return federatedContentRoot;
 };
 
-// TODO we should match the akamai patterns /locale/federal/ at the start of the url
-// and make the check more strict.
 export const getFederatedUrl = (url = '') => {
   if (typeof url !== 'string' || !url.includes('/federal/')) return url;
   if (url.startsWith('/')) return `${getFederatedContentRoot()}${url}`;
@@ -366,7 +420,10 @@ export const getFederatedUrl = (url = '') => {
     const { pathname, search, hash } = new URL(url);
     return `${getFederatedContentRoot()}${pathname}${search}${hash}`;
   } catch (e) {
-    window.lana?.log(`getFederatedUrl errored parsing the URL: ${url}: ${e.toString()}`);
+    window.lana?.log(`getFederatedUrl errored parsing the URL: ${url}: ${e.toString()}`, {
+      tags: 'utils',
+      severity: 'error',
+    });
   }
   return url;
 };
@@ -392,7 +449,6 @@ export function hasLanguageLinks(area, paths = LANGUAGE_BASED_PATHS) {
 export async function loadLanguageConfig() {
   if (langConfig) return langConfig;
 
-  const parseList = (str) => str.split(/[\n,]+/).map((t) => t.trim()).filter(Boolean);
   try {
     const response = await fetch(`${getFederatedContentRoot()}/federal/assets/data/languages-config.json`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -410,7 +466,10 @@ export async function loadLanguageConfig() {
 
     return langConfig;
   } catch (e) {
-    window.lana?.log('Failed to load language-config.json:', e);
+    window.lana?.log(`Failed to load language-config.json: ${e}`, {
+      tags: 'utils',
+      severity: 'error',
+    });
   }
 
   return {};
@@ -439,13 +498,13 @@ export const getFedsPlaceholderConfig = ({ useCache = true } = {}) => {
  * @see https://jira.corp.adobe.com/browse/MWPW-173470
  * @see https://jira.corp.adobe.com/browse/MWPW-174411
 */
-export const shouldAllowKrTrial = (button, localePrefix) => {
+export const shouldAllowKrTrial = (link, localePrefix) => {
   const allowKrTrialHash = '#_allow-kr-trial';
-  const hasAllowKrTrial = button.href?.includes(allowKrTrialHash);
+  const hasAllowKrTrial = link.href?.includes(allowKrTrialHash);
   if (hasAllowKrTrial) {
-    button.href = button.href.replace(allowKrTrialHash, '');
-    const modalHash = button.getAttribute('data-modal-hash');
-    if (modalHash) button.setAttribute('data-modal-hash', modalHash.replace(allowKrTrialHash, ''));
+    link.href = link.href.replace(allowKrTrialHash, '');
+    const modalHash = link.getAttribute('data-modal-hash');
+    if (modalHash) link.setAttribute('data-modal-hash', modalHash.replace(allowKrTrialHash, ''));
   }
   return localePrefix === '/kr' && hasAllowKrTrial;
 };
@@ -455,26 +514,38 @@ export const shouldAllowKrTrial = (button, localePrefix) => {
  * @see https://jira.corp.adobe.com/browse/MWPW-173470
  * @see https://jira.corp.adobe.com/browse/MWPW-174411
 */
-export const shouldBlockFreeTrialLinks = ({ button, localePrefix, parent }) => {
-  if (shouldAllowKrTrial(button, localePrefix) || localePrefix !== '/kr'
-      || (!button.dataset?.modalPath?.includes('/kr/cc-shared/fragments/trial-modals')
-       && !['free-trial', 'free trial', '무료 체험판', '무료 체험하기', '{{try-for-free}}']
-         .some((pattern) => button.textContent?.toLowerCase()?.includes(pattern.toLowerCase())))) {
+export const shouldBlockFreeTrialLinks = (link) => {
+  const localePrefix = getConfig()?.locale?.prefix;
+  if (shouldAllowKrTrial(link, localePrefix) || localePrefix !== '/kr'
+      || (!link.dataset?.modalPath?.includes('/kr/cc-shared/fragments/trial-modals')
+       && !['free-trial', 'free trial', '무료 체험판', '무료 체험하기', '{{try-for-free}}', '무료', 'free']
+         .some((pattern) => link.textContent?.toLowerCase()?.includes(pattern.toLowerCase())))) {
     return false;
   }
 
-  if (button.dataset.wcsOsi) {
-    button.classList.add('hidden-osi-trial-link');
+  if (link.dataset.wcsOsi) {
+    link.classList.add('hidden-osi-trial-link');
     return false;
   }
 
-  const elementToRemove = (parent?.tagName === 'STRONG' || parent?.tagName === 'EM') && parent?.children?.length === 1 ? parent : button;
+  const parent = link.parentElement;
+  const elementToRemove = (parent?.tagName === 'STRONG' || parent?.tagName === 'EM') && parent?.children?.length === 1 ? parent : link;
   elementToRemove.remove();
   return true;
 };
 
 export function isInTextNode(node) {
   return (node.parentElement.childNodes.length > 1 && node.parentElement.firstChild.tagName === 'A') || node.parentElement.firstChild.nodeType === Node.TEXT_NODE;
+}
+
+export function lingoActive() {
+  const langFirst = (PAGE_URL.searchParams.get('langfirst') || getMetadata('langfirst'))?.toLowerCase();
+  return ['true', 'on'].includes(langFirst);
+}
+
+export function mepLingoSkipQI() {
+  const skip = (PAGE_URL.searchParams.get('mep-lingo-skip-qi') || getMetadata('mep-lingo-skip-qi'))?.toLowerCase();
+  return lingoActive() && ['true', 'on'].includes(skip);
 }
 
 export function createTag(tag, attributes, html, options = {}) {
@@ -541,10 +612,125 @@ function isLocalizedPath(path, locales) {
     || legacyLocalePath;
 }
 
-export function localizeLink(
+function processQueryIndexMap(link, domain) {
+  const result = {
+    pathsRequest: null,
+    requestResolved: false,
+    domains: [domain],
+  };
+
+  result.pathsRequest = fetch(link)
+    .then((response) => response.json())
+    .then((json) => json.data?.map((d) => (d.path ?? d.Path)?.replace(/\.html$/, '')) ?? [])
+    .catch((error) => {
+      window.lana?.log(`Failed to load query index: ${link} | ${error}`, {
+        tags: 'utils',
+        severity: 'error',
+      });
+      return [];
+    })
+    .finally(() => {
+      result.requestResolved = true;
+    });
+
+  return result;
+}
+const getDomainLingo = (path) => path?.split('/*')[0];
+
+async function loadQueryIndexes(prefix, onlyCurrentSite = false, links = []) {
+  const config = getConfig();
+  const queryIndexSuffix = config.env?.name === 'prod' ? '' : '-preview';
+
+  if (links.length && links.some((link) => link.includes('/federal/')) && !queryIndexes.federal) {
+    queryIndexes.federal = processQueryIndexMap(
+      `${getFederatedContentRoot()}${prefix}/federal/assets/lingo/query-index${queryIndexSuffix}.json`,
+      getFederatedContentRoot().replace('https://', ''),
+    );
+    queryIndexes.federal.domains.push(window.location.hostname);
+  }
+  if (lingoSiteMapping || isLoadingQueryIndexes) return;
+  isLoadingQueryIndexes = true;
+
+  const origin = config.origin || window.location.origin;
+  const contentRoot = config.contentRoot ?? '';
+  const regionalContentRoot = `${origin}${prefix}${contentRoot}`;
+  const siteId = config.uniqueSiteId ?? '';
+
+  queryIndexes[siteId] = processQueryIndexMap(
+    `${regionalContentRoot}/assets/lingo/query-index${queryIndexSuffix}.json`,
+    window.location.hostname,
+  );
+
+  if (onlyCurrentSite) {
+    lingoSiteMapping = Promise.resolve(lingoSiteMappingLoaded = true);
+    return;
+  }
+
+  if (config.queryIndexPath) {
+    const baseContentRoot = `${origin}${config.locale.base ? `/${config.locale.base}` : ''}${contentRoot}`;
+    baseQueryIndex = processQueryIndexMap(
+      `${baseContentRoot}${config.queryIndexPath}`,
+      window.location.hostname,
+    );
+  }
+
+  lingoSiteMapping = (async () => {
+    try {
+      const response = await fetch(`${getFederatedContentRoot()}/federal/assets/data/lingo-site-mapping.json`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const configJson = await response.json();
+
+      siteQueryIndexMapLingo = configJson['site-query-index-map']?.data ?? [];
+      const siteLocalesData = configJson['site-locales']?.data ?? [];
+
+      const existingIndex = siteQueryIndexMapLingo.find((d) => d.uniqueSiteId === siteId);
+      const existingDomain = getDomainLingo(existingIndex?.queryIndexWebPath);
+
+      if (existingDomain) {
+        [queryIndexes[siteId], baseQueryIndex].forEach((queryIndex) => {
+          if (queryIndex && !queryIndex.domains.includes(existingDomain)) {
+            queryIndex.domains.push(existingDomain);
+          }
+        });
+      }
+
+      const domainInProdDomains = (d) => d.uniqueSiteId !== siteId
+        && config.prodDomains?.includes(getDomainLingo(d.queryIndexWebPath));
+
+      const hasRegionalQueryIndex = (locale) => parseList(locale.regionalSites).includes(prefix);
+
+      siteQueryIndexMapLingo
+        .filter(domainInProdDomains)
+        .forEach(({ uniqueSiteId, queryIndexWebPath }) => {
+          const hasRegionalSite = siteLocalesData
+            .some((s) => s.uniqueSiteId === uniqueSiteId && hasRegionalQueryIndex(s));
+
+          if (!hasRegionalSite) return;
+          const domain = getDomainLingo(queryIndexWebPath);
+          const indexPath = `https://${queryIndexWebPath.replace('/*', prefix)}`;
+          queryIndexes[uniqueSiteId] = processQueryIndexMap(indexPath, domain);
+        });
+    } catch (e) {
+      window.lana?.log(`Failed to load lingo-site-mapping.json: ${e}`, {
+        tags: 'utils',
+        severity: 'error',
+      });
+    } finally {
+      lingoSiteMappingLoaded = true;
+    }
+  })();
+
+  import('./lingo.js');
+}
+
+function localizeLinkCore(
   href,
-  originHostName = window.location.hostname,
-  overrideDomain = false,
+  originHostName,
+  overrideDomain,
+  useAsync,
+  overridePrefix = null,
+  overrideBase = null,
+  aTag = null,
 ) {
   try {
     const url = new URL(href);
@@ -556,20 +742,190 @@ export function localizeLink(
     const extension = getExtension(path);
     const allowedExts = ['', 'html', 'json'];
     if (!allowedExts.includes(extension)) return processedHref;
-    const { locale, locales, languages, prodDomains } = getConfig();
+    const { locale, locales, languages, prodDomains, uniqueSiteId } = getConfig();
     if (!locale || !(locales || languages)) return processedHref;
-    const isLocalizable = relative || (prodDomains && prodDomains.includes(url.hostname))
-      || overrideDomain;
+    const isLocalizable = relative
+        || (url.hostname && prodDomains && prodDomains.includes(url.hostname))
+        || overrideDomain
+        || (url.hostname && getFederatedContentRoot().includes(url.hostname));
     if (!isLocalizable) return processedHref;
     const isLocalizedLink = isLocalizedPath(path, locales);
     if (isLocalizedLink) return processedHref;
 
-    const prefix = getPrefixBySite(locale, url, relative);
+    const isMepLingoFragment = path.includes('/fragments/') && aTag?.dataset.mepLingo === 'true';
+    let prefix = overridePrefix ?? getPrefixBySite(locale, url, relative);
+    const siteId = uniqueSiteId ?? '';
+    const isLcpSection = aTag?.closest('.section')?.dataset.idx === '0';
+    const qiResolved = queryIndexes[siteId]?.requestResolved;
+    const skipQueryIndex = isMepLingoFragment
+      && (mepLingoSkipQI() || (isLcpSection && !qiResolved));
+    if (useAsync && extension !== 'json' && lingoActive() && !skipQueryIndex
+        && (((locale.base || locale.base === '') && !path.includes('/fragments/'))
+          || (!!locale.regions && isMepLingoFragment))) {
+      return (async () => {
+        loadQueryIndexes(prefix, false, [href]);
+        if (!(queryIndexes[siteId]?.requestResolved || lingoSiteMappingLoaded)) {
+          await Promise.all([queryIndexes[siteId]?.pathsRequest, lingoSiteMapping].filter(Boolean));
+        }
+        const matchingIndexes = Object.values(queryIndexes)
+          .filter((q) => q.domains.includes(url.hostname));
+        const base = overrideBase ?? locale.base;
+        const basePrefix = base === '' ? '' : `/${base}`;
+        if (matchingIndexes.length) {
+          const { default: urlInQueryIndex } = await import('./lingo.js');
+          const useRegionalPrefix = await urlInQueryIndex(`${prefix}${path}`, `${basePrefix}${path}`, url.hostname, matchingIndexes, baseQueryIndex, aTag);
+          const shouldFallbackToBase = isMepLingoFragment
+            ? locale?.regions
+            : (locale.base || locale.base === '');
+          if (!useRegionalPrefix && shouldFallbackToBase) prefix = basePrefix;
+        } else if (
+          siteQueryIndexMapLingo
+            ?.filter((index) => getDomainLingo(index?.queryIndexWebPath) === url.hostname)
+            ?.length
+        ) {
+          prefix = basePrefix;
+        }
+        const urlPath = `${prefix}${path}${url.search}${hash}`;
+        return relative ? urlPath : `${url.origin}${urlPath}`;
+      })();
+    }
+
+    if (skipQueryIndex && aTag) aTag.dataset.mepLingoSkippedQI = 'true';
     const urlPath = `${prefix}${path}${url.search}${hash}`;
     return relative ? urlPath : `${url.origin}${urlPath}`;
   } catch (error) {
     return href;
   }
+}
+
+function setCountry() {
+  const country = window.performance?.getEntriesByType('navigation')?.[0]?.serverTiming
+    ?.find((timing) => timing?.name === 'geo')?.description?.toLowerCase();
+  if (!country) return;
+  sessionStorage.setItem('akamai', country);
+  sessionStorage.setItem('feds_location', JSON.stringify({ country: country.toUpperCase() }));
+}
+
+export async function getCountry(skipFallback = false) {
+  const country = PAGE_URL.searchParams.get('akamaiLocale') || sessionStorage.getItem('akamai');
+  if (country || skipFallback) return country?.toLowerCase();
+
+  try {
+    const { getAkamaiCode } = await import('./geo.js');
+    return await getAkamaiCode();
+  } catch (error) {
+    window.lana?.log(`Error getting Akamai code: ${error}`, { severity: 'error' });
+    return null;
+  }
+}
+
+export async function getMepLingoPrefix() {
+  if (!lingoActive()) return null;
+  const config = getConfig();
+  const { locale } = config || {};
+  const { regions } = locale || {};
+
+  if (!regions || !Object.keys(regions).length) return null;
+
+  const country = await getCountry();
+  if (!country) return null;
+
+  const localeKey = locale.prefix === '' ? 'en' : locale.prefix.replace('/', '');
+
+  let regionKey = Object.entries(regions).find(
+    ([key]) => key === country || key === `${country}_${localeKey}`,
+  )?.[0];
+
+  if (!regionKey && config.mepLingoCountryToRegion) {
+    regionKey = Object.entries(config.mepLingoCountryToRegion).find(
+      ([key, countries]) => Array.isArray(countries) && countries.includes(country) && regions[key],
+    )?.[0];
+  }
+
+  return regionKey ? regions[regionKey].prefix : null;
+}
+
+let mepLingoModulePreloaded = false;
+
+function preloadMepLingoModule() {
+  if (mepLingoModulePreloaded) return;
+  mepLingoModulePreloaded = true;
+  import('../features/mep/lingo.js');
+}
+
+function detectMepLingoSwap(a) {
+  if (!a) return;
+  const isInsertHash = a.href.includes('#_mep-lingo-insert');
+  const isRemoveHash = !isInsertHash && a.href.includes('#_mep-lingo-remove');
+  const isRegularHash = !isInsertHash && !isRemoveHash && a.href.includes('#_mep-lingo');
+
+  if (isInsertHash || isRemoveHash || isRegularHash) {
+    let hashToRemove = '#_mep-lingo';
+    if (isInsertHash) hashToRemove = '#_mep-lingo-insert';
+    if (isRemoveHash) hashToRemove = '#_mep-lingo-remove';
+
+    a.dataset.mepLingo = 'true';
+    if (isInsertHash) a.dataset.mepLingoInsert = 'true';
+    if (isRemoveHash) a.dataset.mepLingoRemove = 'true';
+    a.dataset.originalHref = a.href.replace(hashToRemove, '');
+    a.href = a.href.replace(hashToRemove, '');
+    if (lingoActive()) preloadMepLingoModule();
+    if (isInsertHash || isRemoveHash) return;
+  }
+  const row = a.closest('.section > div > div');
+  const firstCellText = row?.children[0]?.textContent?.toLowerCase().trim();
+
+  if (firstCellText === 'mep-lingo') {
+    a.dataset.mepLingo = 'true';
+    a.dataset.originalHref = a.href;
+    if (lingoActive()) preloadMepLingoModule();
+    const swapBlock = a.closest('.section > div[class]');
+    if (a.closest('.section-metadata')) {
+      a.dataset.mepLingoSectionSwap = 'true';
+    } else if (swapBlock) {
+      const [blockName] = swapBlock.classList;
+      a.dataset.mepLingoBlockSwap = blockName;
+
+      if (blockName === 'mep-lingo') {
+        if (swapBlock.classList.contains('insert')) {
+          a.dataset.mepLingoInsert = 'true';
+        } else if (swapBlock.classList.contains('remove')) {
+          a.dataset.mepLingoRemove = 'true';
+        }
+      }
+    }
+  }
+}
+
+export async function localizeLinkAsync(
+  href,
+  originHostName = window.location.hostname,
+  overrideDomain = false,
+  aTag = null,
+) {
+  if (!href) return href;
+
+  detectMepLingoSwap(aTag);
+  const effectiveHref = href.replace(/#_mep-lingo(-insert|-remove)?/g, '');
+  const isMepLingoLink = aTag?.dataset?.mepLingo
+    || aTag?.dataset?.mepLingoSectionSwap
+    || aTag?.dataset?.mepLingoBlockSwap;
+
+  const prefix = lingoActive() && isMepLingoLink ? await getMepLingoPrefix() : null;
+  const base = lingoActive() && isMepLingoLink
+    ? getConfig()?.locale?.prefix.replace('/', '')
+    : null;
+
+  return localizeLinkCore(effectiveHref, originHostName, overrideDomain, true, prefix, base, aTag);
+}
+
+// this method is deprecated - use localizeLinkAsync instead
+export function localizeLink(
+  href,
+  originHostName = window.location.hostname,
+  overrideDomain = false,
+) {
+  return localizeLinkCore(href, originHostName, overrideDomain, false);
 }
 
 export function loadLink(href, {
@@ -625,7 +981,7 @@ export function appendHtmlToLink(link) {
   const { useDotHtml } = getConfig();
   if (!useDotHtml) return;
   const href = link.getAttribute('href');
-  if (!href?.length) return;
+  if (!href?.length || href.includes('#_nohtml')) return;
 
   const { autoBlocks = [], htmlExclude = [] } = getConfig();
 
@@ -657,7 +1013,10 @@ export function appendHtmlToLink(link) {
         : linkUrl.href);
     }
   } catch (e) {
-    window.lana?.log(`Error while attempting to append '.html' to ${link}: ${e}`);
+    window.lana?.log(`Error while attempting to append '.html' to ${link}: ${e}`, {
+      tags: 'utils',
+      severity: 'error',
+    });
   }
 }
 
@@ -736,7 +1095,10 @@ function getBlockData(block) {
       });
       if (match?.base) base = match.base;
     } catch (error) {
-      window.lana?.log(`Invalid externalLibs configuration: ${error.message || error}`);
+      window.lana?.log(`Invalid externalLibs configuration: ${error.message || error}`, {
+        tags: 'utils',
+        severity: 'error',
+      });
     }
   }
 
@@ -801,6 +1163,11 @@ export function decorateSVG(a) {
 
     const img = createTag('img', { loading: 'lazy', src, alt: altText || '' });
     const pic = createTag('picture', null, img);
+
+    if (altText) {
+      const parentHeading = a.parentElement.closest('h1, h2, h3, h4, h5, h6');
+      parentHeading?.appendChild(createTag('span', { class: 'hidden' }, altText));
+    }
 
     if (authoredUrl.pathname === hrefUrl.pathname) {
       a.parentElement.replaceChild(pic, a);
@@ -869,7 +1236,10 @@ export function decorateAutoBlock(a) {
   try {
     url = new URL(a.href);
   } catch (e) {
-    window.lana?.log(`Cannot make URL from decorateAutoBlock - ${a?.href}: ${e.toString()}`);
+    window.lana?.log(`Cannot make URL from decorateAutoBlock - ${a?.href}: ${e.toString()}`, {
+      tags: 'utils',
+      severity: 'error',
+    });
     return false;
   }
 
@@ -889,6 +1259,12 @@ export function decorateAutoBlock(a) {
         return false;
       }
 
+      if (a.dataset.mepLingoSectionSwap || a.dataset.mepLingoBlockSwap) {
+        a.dataset.mepLingo = 'true';
+        a.className = `${key} link-block`;
+        return true;
+      }
+
       const isInlineFrag = url.hash.includes('#_inline');
       if (url.hash === '' || isInlineFrag) {
         const { parentElement } = a;
@@ -906,7 +1282,7 @@ export function decorateAutoBlock(a) {
         return false;
       }
 
-      // Modals
+      // Modals (exclude special fragment hashes)
       if (url.hash !== '' && !isInlineFrag && !url.hash.includes('#_replacecell')) {
         a.dataset.modalPath = url.pathname;
         a.dataset.modalHash = url.hash;
@@ -953,7 +1329,7 @@ export function convertStageLinks({ anchors, config, hostname, href }) {
   const [, domainsMap] = matchedRules;
   [...anchors].forEach((a) => {
     const hasLocalePrefix = a.pathname.startsWith(`${locale.prefix}/`);
-    const noLocaleLink = hasLocalePrefix ? a.href.replace(locale.prefix, '') : a.href;
+    const noLocaleLink = hasLocalePrefix ? a.href.replace(`/${locale.prefix.replace(/^\//, '')}/`, '/') : a.href;
     const matchedDomain = Object.keys(domainsMap)
       .find((domain) => (new RegExp(domain)).test(noLocaleLink));
     if (!matchedDomain) return;
@@ -970,72 +1346,118 @@ export function convertStageLinks({ anchors, config, hostname, href }) {
   });
 }
 
-export function decorateLinks(el) {
+function decorateLinkElement(a, config, hasDnt) {
+  if (hasDnt) a.dataset.hasDnt = true;
+  if (a.href.includes('http:')) a.setAttribute('data-http-link', 'true');
+  decorateSVG(a);
+  if (a.href.includes('#_blank')) {
+    a.setAttribute('target', '_blank');
+    a.href = a.href.replace('#_blank', '');
+  }
+  if (a.href.includes('#_alloy')) {
+    import('../martech/alloy-links.js').then(({ default: processAlloyLink }) => {
+      processAlloyLink(a);
+    });
+  }
+  if (a.href.includes('#_nofollow')) {
+    a.setAttribute('rel', 'nofollow');
+    a.href = a.href.replace('#_nofollow', '');
+  }
+  if (a.href.includes('#_nohtml')) {
+    a.href = a.href.replace('#_nohtml', '');
+  }
+  // Custom action links
+  const loginEvent = '#_evt-login';
+  if (a.href.includes(loginEvent)) {
+    a.href = a.href.replace(loginEvent, '');
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const { signInContext } = config;
+      window.adobeIMS?.signIn(signInContext);
+    });
+  }
+  const copyEvent = '#_evt-copy';
+  if (a.href.includes(copyEvent)) {
+    decorateCopyLink(a, copyEvent);
+  }
+  const branchQuickLink = 'app.link';
+  if (a.href.includes(branchQuickLink)) {
+    (async () => {
+      const { default: processQuickLink } = await import('../features/branch-quick-links/branch-quick-links.js');
+      processQuickLink(a);
+    })();
+  }
+  // Append aria-label
+  const pipeRegex = /\s?\|([^|]*)$/;
+  if (pipeRegex.test(a.textContent) && !/\.[a-z]+/i.test(a.textContent)) {
+    const node = [...a.childNodes].reverse()[0];
+    const ariaLabel = node.textContent.match(pipeRegex)?.[1];
+    node.textContent = node.textContent.replace(pipeRegex, '');
+    a.setAttribute('aria-label', (ariaLabel || '').trim());
+  }
+}
+
+function processLinkDecoration(a, config, hasDnt) {
+  decorateLinkElement(a, config, hasDnt);
+  if (a.href.includes('#_dnb')) {
+    a.href = a.href.replace('#_dnb', '');
+    return null;
+  }
+  const autoBlock = decorateAutoBlock(a);
+  return autoBlock ? a : null;
+}
+
+function setupLinksDecoration(el) {
   const config = getConfig();
   decorateImageLinks(el);
   const anchors = el.getElementsByTagName('a');
   const { hostname, href } = window.location;
-  const links = [...anchors].reduce((rdx, a) => {
+  return { config, anchors, hostname, href };
+}
+
+const decoratedLinks = new WeakSet();
+
+export async function decorateLinksAsync(el) {
+  const { config, anchors, hostname, href } = setupLinksDecoration(el);
+
+  const linksPromises = [...anchors].map(async (a) => {
+    if (decoratedLinks.has(a)) {
+      return a.classList.contains('link-block') ? a : null;
+    }
+    if (a.href.startsWith('https://#')) a.href = a.href.replace('https://', '');
     appendHtmlToLink(a);
-    if (a.href.includes('http:')) a.setAttribute('data-http-link', 'true');
+    const hasDnt = a.href.includes('#_dnt');
+    if (!a.dataset.hasDnt) {
+      a.href = await localizeLinkAsync(
+        a.href,
+        window.location.hostname,
+        false,
+        a,
+      );
+    }
+    decoratedLinks.add(a);
+    return processLinkDecoration(a, config, hasDnt);
+  });
+
+  const links = (await Promise.all(linksPromises)).filter(Boolean);
+  convertStageLinks({ anchors, config, hostname, href });
+  return links;
+}
+
+// this method is deprecated - use decorateLinksAsync instead
+export function decorateLinks(el) {
+  const { config, anchors, hostname, href } = setupLinksDecoration(el);
+
+  const links = [...anchors].reduce((rdx, a) => {
+    if (a.href.startsWith('https://#')) a.href = a.href.replace('https://', '');
+    appendHtmlToLink(a);
     const hasDnt = a.href.includes('#_dnt');
     if (!a.dataset?.hasDnt) a.href = localizeLink(a.href);
-    if (hasDnt) a.dataset.hasDnt = true;
-    decorateSVG(a);
-    if (a.href.includes('#_blank')) {
-      a.setAttribute('target', '_blank');
-      a.href = a.href.replace('#_blank', '');
-    }
-    if (a.href.includes('#_alloy')) {
-      import('../martech/alloy-links.js').then(({ default: processAlloyLink }) => {
-        processAlloyLink(a);
-      });
-    }
-    if (a.href.includes('#_nofollow')) {
-      a.setAttribute('rel', 'nofollow');
-      a.href = a.href.replace('#_nofollow', '');
-    }
-    if (a.href.includes('#_dnb')) {
-      a.href = a.href.replace('#_dnb', '');
-    } else {
-      const autoBlock = decorateAutoBlock(a);
-      if (autoBlock) {
-        rdx.push(a);
-      }
-    }
-    // Custom action links
-    const loginEvent = '#_evt-login';
-    if (a.href.includes(loginEvent)) {
-      a.href = a.href.replace(loginEvent, '');
-      a.addEventListener('click', (e) => {
-        e.preventDefault();
-        const { signInContext } = config;
-        window.adobeIMS?.signIn(signInContext);
-      });
-    }
-    const copyEvent = '#_evt-copy';
-    if (a.href.includes(copyEvent)) {
-      decorateCopyLink(a, copyEvent);
-    }
-    const branchQuickLink = 'app.link';
-
-    if (a.href.includes(branchQuickLink)) {
-      (async () => {
-        const { default: processQuickLink } = await import('../features/branch-quick-links/branch-quick-links.js');
-        processQuickLink(a);
-      })();
-    }
-    // Append aria-label
-    const pipeRegex = /\s?\|([^|]*)$/;
-    if (pipeRegex.test(a.textContent) && !/\.[a-z]+/i.test(a.textContent)) {
-      const node = [...a.childNodes].reverse()[0];
-      const ariaLabel = node.textContent.match(pipeRegex)?.[1];
-      node.textContent = node.textContent.replace(pipeRegex, '');
-      a.setAttribute('aria-label', (ariaLabel || '').trim());
-    }
-
+    const result = processLinkDecoration(a, config, hasDnt);
+    if (result) rdx.push(result);
     return rdx;
   }, []);
+
   convertStageLinks({ anchors, config, hostname, href });
   return links;
 }
@@ -1127,12 +1549,19 @@ async function decorateHeader() {
 }
 
 async function decorateIcons(area, config) {
-  const icons = area.querySelectorAll('span.icon');
+  let icons = area.querySelectorAll('span.icon');
   if (icons.length === 0) return;
   const { base, iconsExcludeBlocks } = config;
   if (iconsExcludeBlocks) {
-    const excludedIconsCount = [...icons].filter((icon) => iconsExcludeBlocks.some((block) => icon.closest(`div.${block}`))).length;
-    if (excludedIconsCount === icons.length) return;
+    if (getMetadata('theme') === 'max25') {
+      // TODO: Remove after correcting core logic
+      const includeIcons = [...icons].filter((icon) => !iconsExcludeBlocks.some((block) => icon.closest(`div.${block}`)));
+      if (!includeIcons.length) return;
+      icons = includeIcons;
+    } else {
+      const excludedIconsCount = [...icons].filter((icon) => iconsExcludeBlocks.some((block) => icon.closest(`div.${block}`))).length;
+      if (excludedIconsCount === icons.length) return;
+    }
   }
   loadStyle(`${base}/features/icons/icons.css`);
   const { default: loadIcons } = await import('../features/icons/icons.js');
@@ -1231,8 +1660,10 @@ export function filterDuplicatedLinkBlocks(blocks) {
   return uniqueBlocks;
 }
 
-function decorateSection(section, idx) {
-  let links = decorateLinks(section);
+async function decorateSection(section, idx) {
+  section.dataset.status = 'pending';
+  section.dataset.idx = idx;
+  let links = await decorateLinksAsync(section);
   decorateDefaults(section);
   const blocks = section.querySelectorAll(':scope > div[class]:not(.content)');
 
@@ -1245,7 +1676,8 @@ function decorateSection(section, idx) {
           link.href = link.href.replace('#_replacecell', '');
         } else if (link.classList.contains('fragment')
           && MILO_BLOCKS.includes(blockName) // do not inline consumer blocks (for now)
-          && !doNotInline.includes(blockName)) {
+          && !doNotInline.includes(blockName)
+          && link.dataset.mepLingo !== 'true') {
           if (!link.href.includes('#_inline')) {
             link.href = `${link.href}#_inline`;
           }
@@ -1261,20 +1693,15 @@ function decorateSection(section, idx) {
   if (embeddedLinks.length) {
     links = links.filter((link) => !embeddedLinks.includes(link));
   }
-  section.className = 'section';
+
+  section.className = `${section.classList.contains('section') ? section.className : 'section'}`;
   section.dataset.status = 'decorated';
-  section.dataset.idx = idx;
   return {
     blocks: [...links, ...blocks],
     el: section,
     idx,
     preloadLinks: filterDuplicatedLinkBlocks(blockLinks.autoBlocks),
   };
-}
-
-function decorateSections(el, isDoc) {
-  const selector = isDoc ? 'body > main > div' : ':scope > div';
-  return [...el.querySelectorAll(selector)].map(decorateSection);
 }
 
 export async function decorateFooterPromo(doc = document) {
@@ -1339,7 +1766,7 @@ export async function loadIms() {
       reject(new Error('Missing IMS Client ID'));
       return;
     }
-    const [unavMeta, ahomeMeta] = [getMetadata('universal-nav')?.trim(), getMetadata('adobe-home-redirect')];
+    const [unavMeta, ahomeMeta, imsGuest] = [getMetadata('universal-nav')?.trim(), getMetadata('adobe-home-redirect'), getMetadata('ims-guest-token')];
     const defaultScope = `AdobeID,openid,gnav${unavMeta && unavMeta !== 'off' ? ',pps.read,firefly_api,additional_info.roles,read_organizations,account_cluster.read' : ''}`;
     const timeout = setTimeout(() => reject(new Error('IMS timeout')), imsTimeout || 5000);
     window.adobeid = {
@@ -1356,6 +1783,11 @@ export async function loadIms() {
         clearTimeout(timeout);
       },
       onError: reject,
+      ...(imsGuest === 'on' && {
+        api_parameters: { check_token: { guest_allowed: true } },
+        enableGuestAccounts: true,
+        enableGuestTokenForceRefresh: true,
+      }),
       ...adobeid,
     };
     const path = PAGE_URL.searchParams.get('useAlternateImsDomain')
@@ -1469,10 +1901,9 @@ async function checkForPageMods() {
   loadLink(`${getConfig().base}/martech/helpers.js`, { rel: 'preload', as: 'script', crossorigin: 'anonymous' });
 
   const promises = loadMepAddons();
-  const akamaiCode = getMepEnablement('akamaiLocale') || sessionStorage.getItem('akamai');
+  const akamaiCode = getMepEnablement('akamaiLocale') || await getCountry(true);
   if (mepgeolocation && !akamaiCode) {
-    const { getAkamaiCode } = await import('../features/georoutingv2/georoutingv2.js');
-    countryIPPromise = getAkamaiCode(true);
+    countryIPPromise = getCountry();
   }
   const enablePersV2 = enablePersonalizationV2();
   if ((target || xlg) && enablePersV2) {
@@ -1526,16 +1957,43 @@ async function checkForPageMods() {
   });
 }
 
-function setCountry() {
-  const country = window.performance?.getEntriesByType('navigation')?.[0]?.serverTiming
-    ?.find((timing) => timing?.name === 'geo')?.description?.toLowerCase();
-  if (!country) return;
-  sessionStorage.setItem('akamai', country);
-  sessionStorage.setItem('feds_location', JSON.stringify({ country: country.toUpperCase() }));
+async function decorateMeta(ignoreNames = []) {
+  const { origin } = window.location;
+  const contents = document.head.querySelectorAll('[content*=".hlx."]:not([data-localized]), [content*=".aem."]:not([data-localized]), [content*="/federal/"]:not([data-localized])');
+  await Promise.all(Array.from(contents).map(async (meta) => {
+    const name = meta.getAttribute('name') || meta.getAttribute('property');
+    if (name === 'hlx:proxyUrl' || name?.endsWith('schedule') || meta.getAttribute('http-equiv') === 'Content-Security-Policy') return;
+    if (ignoreNames.includes(name)) return;
+    try {
+      const url = new URL(meta.content);
+      const localizedLink = await localizeLinkAsync(`${origin}${url.pathname}`);
+      const localizedURL = localizedLink.includes(origin) ? localizedLink : `${origin}${localizedLink}`;
+      meta.setAttribute('content', `${localizedURL}${url.search}${url.hash}`);
+      meta.dataset.localized = 'true';
+    } catch (e) {
+      window.lana?.log(`Cannot make URL from metadata - ${meta.content}: ${e.toString()}`, {
+        tags: 'utils',
+        severity: 'error',
+      });
+    }
+  }));
+}
+
+function initModalEventListener() {
+  window.addEventListener('modal:open', async (e) => {
+    const { miloLibs } = getConfig();
+    const { findDetails, getModal } = await import('../blocks/modal/modal.js');
+    loadStyle(`${miloLibs}/blocks/modal/modal.css`);
+    const details = await findDetails(e.detail.hash);
+    if (details) getModal(details);
+  });
 }
 
 async function loadPostLCP(config) {
   import('./favicon.js').then(({ default: loadFavIcon }) => loadFavIcon(createTag, getConfig(), getMetadata));
+
+  await decorateMeta();
+
   await decoratePlaceholders(document.body.querySelector('header'), config);
   const sk = document.querySelector('aem-sidekick, helix-sidekick');
   if (sk) import('./sidekick-decorate.js').then((mod) => { mod.default(sk); });
@@ -1546,9 +2004,14 @@ async function loadPostLCP(config) {
     if (enablePersonalizationV2() && !isMartechLoaded) loadMartech();
   } else if (!isMartechLoaded) loadMartech();
 
+  const languageBanner = PAGE_URL.searchParams.get('languageBanner') ?? (getMetadata('languagebanner') || config.languageBanner);
   const georouting = getMetadata('georouting') || config.geoRouting;
-  config.georouting = { loadedPromise: Promise.resolve() };
-  if (georouting === 'on') {
+  config.georouting = { loadedPromise: Promise.resolve(), enabled: config.geoRouting };
+
+  if (languageBanner === 'on') {
+    const { default: init } = await import('../features/language-banner/language-banner.js');
+    await init();
+  } else if (georouting === 'on') {
     const jsonPromise = fetch(`${config.contentRoot ?? ''}/georoutingv2.json`);
     config.georouting.loadedPromise = (async () => {
       const { default: loadGeoRouting } = await import('../features/georoutingv2/georoutingv2.js');
@@ -1560,6 +2023,7 @@ async function loadPostLCP(config) {
   if (header) {
     header.classList.add('gnav-hide');
     performance.mark('Gnav-Start');
+
     loadBlock(header);
     header.classList.remove('gnav-hide');
   }
@@ -1586,7 +2050,10 @@ export function scrollToHashedElement(hash) {
   try {
     targetElement = document.querySelector(`#${elementId}:not(.dialog-modal)`);
   } catch (e) {
-    window.lana?.log(`Could not query element because of invalid hash - ${elementId}: ${e.toString()}`);
+    window.lana?.log(`Could not query element because of invalid hash - ${elementId}: ${e.toString()}`, {
+      tags: 'utils',
+      severity: 'error',
+    });
   }
   if (!targetElement) return;
   const bufferHeight = document.querySelector('.global-navigation')?.offsetHeight || 0;
@@ -1640,9 +2107,7 @@ export async function loadDeferred(area, blocks, config) {
 function initSidekick() {
   const initPlugins = async () => {
     const { default: init } = await import('./sidekick.js');
-    const { getPreflightResults } = await import('../blocks/preflight/checks/preflightApi.js');
     init({ createTag, loadBlock, loadScript, loadStyle });
-    getPreflightResults(window.location.href, document);
   };
 
   if (document.querySelector('aem-sidekick, helix-sidekick')) {
@@ -1654,34 +2119,147 @@ function initSidekick() {
   }
 }
 
-function decorateMeta() {
-  const { origin } = window.location;
-  const contents = document.head.querySelectorAll('[content*=".hlx."], [content*=".aem."], [content*="/federal/"]');
-  contents.forEach((meta) => {
-    if (meta.getAttribute('property') === 'hlx:proxyUrl' || meta.getAttribute('name')?.endsWith('schedule')) return;
-    try {
-      const url = new URL(meta.content);
-      const localizedLink = localizeLink(`${origin}${url.pathname}`);
-      const localizedURL = localizedLink.includes(origin) ? localizedLink : `${origin}${localizedLink}`;
-      meta.setAttribute('content', `${localizedURL}${url.search}${url.hash}`);
-    } catch (e) {
-      window.lana?.log(`Cannot make URL from metadata - ${meta.content}: ${e.toString()}`);
-    }
-  });
+let targetMarket = null;
+let langBannerPromise;
+export const getTargetMarket = () => targetMarket;
+export const setTargetMarket = (market) => { targetMarket = market; };
 
-  // Event-based modal
-  window.addEventListener('modal:open', async (e) => {
-    const { miloLibs } = getConfig();
-    const { findDetails, getModal } = await import('../blocks/modal/modal.js');
-    loadStyle(`${miloLibs}/blocks/modal/modal.css`);
-    const details = findDetails(e.detail.hash);
-    if (details) getModal(details);
-  });
+const getCookie = (name) => document.cookie
+  .split('; ')
+  .find((row) => row.startsWith(`${name}=`))
+  ?.split('=')[1];
+
+function getMarketsUrl() {
+  const { env, marketsSource } = getConfig();
+  const sourceFromUrl = PAGE_URL.searchParams.get('marketsSource');
+  const allowedMarkets = ['bacom'];
+  const marketsSourceKey = (/^[a-zA-Z0-9-]+$/.test(sourceFromUrl) && (env?.name !== 'prod' || allowedMarkets.includes(sourceFromUrl)) && sourceFromUrl)
+      || getMetadata('marketssource')
+      || marketsSource;
+
+  return `${getFederatedContentRoot()}/federal/supported-markets/supported-markets${marketsSourceKey ? `-${marketsSourceKey}` : ''}.json`;
 }
 
-function decorateDocumentExtras() {
-  decorateMeta();
-  decorateHeader();
+async function decorateLanguageBanner() {
+  const { locale, locales, languageBanner } = getConfig();
+  const languageBannerEnabled = PAGE_URL.searchParams.get('languageBanner') ?? (getMetadata('languagebanner') || languageBanner);
+  if (languageBannerEnabled !== 'on') return;
+  const internationalCookie = getCookie('international');
+  let showBanner = false;
+  if (internationalCookie === (locale.prefix?.replace('/', '') || 'us')) return;
+  const pageLang = locale.ietf.split('-')[0];
+  const prefLang = internationalCookie
+    ? (locales[internationalCookie === 'us' ? '' : internationalCookie]?.ietf?.split('-')[0] || internationalCookie.split('_').pop())
+    : navigator.language?.split('-')[0] || null;
+
+  const [geoIpCode, marketsConfig] = await Promise.all([
+    getCountry(),
+    fetch(getMarketsUrl())
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null),
+  ]);
+
+  if (!geoIpCode || !marketsConfig) return;
+  const geoIp = geoIpCode.toLowerCase();
+  marketsConfig.data.forEach((market) => {
+    market.supportedRegions = market.supportedRegions.split(',').map((r) => r.trim().toLowerCase());
+  });
+  const pagePrefix = locale.prefix?.replace('/', '') || '';
+  const pageMarket = marketsConfig.data.find((m) => m.prefix === pagePrefix)
+    ?? marketsConfig.data.find((m) => m.prefix === locale.base);
+  const isSupportedMarket = pageMarket?.supportedRegions.includes(geoIp);
+
+  const candidateMarkets = [];
+  const addAndShow = (...ms) => {
+    showBanner = true;
+    candidateMarkets.push(...ms);
+  };
+
+  if (isSupportedMarket) {
+    if (!prefLang || pageLang === prefLang) return;
+    const prefMarket = marketsConfig.data.find((market) => (
+      market.lang === prefLang
+      && market.supportedRegions.includes(geoIp)
+    ));
+    if (prefMarket) addAndShow(prefMarket);
+    else return;
+  } else {
+    // Unsupported Market Path
+    const marketsForGeo = marketsConfig.data.filter((market) => (
+      market.supportedRegions.includes(geoIp)));
+    if (!marketsForGeo.length) return;
+
+    let prefMarketForGeo;
+    if (prefLang) {
+      prefMarketForGeo = marketsForGeo.find((market) => market.lang === prefLang);
+      if (prefMarketForGeo) addAndShow(prefMarketForGeo);
+    }
+
+    if (!prefMarketForGeo) {
+      const marketsWithPriority = [];
+      marketsForGeo.forEach((market) => {
+        if (market.regionPriorities) {
+          const priorityMap = new Map(
+            market.regionPriorities.split(',').map((p) => {
+              const [region, priority] = p.trim().split(':');
+              return [region.toLowerCase(), parseInt(priority, 10)];
+            }),
+          );
+          const priority = priorityMap.get(geoIp);
+          if (priority) {
+            marketsWithPriority.push({ market, priority });
+          }
+        }
+      });
+
+      if (marketsWithPriority.length) {
+        marketsWithPriority.sort((a, b) => a.priority - b.priority);
+      }
+      addAndShow(...(marketsWithPriority.length
+        ? marketsWithPriority.map((item) => item.market)
+        : [marketsForGeo[0]]));
+    }
+  }
+
+  if (!showBanner) return;
+
+  const { pathname, origin } = window.location;
+  const pagePath = locale.prefix ? pathname.replace(locale.prefix, '') : pathname;
+
+  const fetchPromises = candidateMarkets.map((market) => {
+    const url = `${origin}${market.prefix ? `/${market.prefix}` : ''}${pagePath}`;
+    return fetch(url, { method: 'HEAD' })
+      .then((res) => ({ market, ok: res.ok }))
+      .catch(() => ({ market, ok: false }));
+  });
+
+  for (const promise of fetchPromises) {
+    const { market, ok } = await promise;
+    if (ok) { targetMarket = market; break; }
+  }
+
+  if (!targetMarket) return;
+
+  document.body.prepend(createTag('div', { class: 'language-banner', 'daa-lh': 'language-banner' }));
+  const existingWrapper = document.querySelector('.feds-promo-aside-wrapper');
+  if (existingWrapper) {
+    existingWrapper.remove();
+    document.querySelector('.global-navigation').classList.remove('has-promo');
+  }
+}
+
+function preloadMarketsConfig() {
+  const config = getConfig();
+  const languageBannerEnabled = PAGE_URL.searchParams.get('languageBanner') ?? (getMetadata('languagebanner') || config.languageBanner);
+  if (languageBannerEnabled !== 'on') return;
+  const marketsUrl = getMarketsUrl();
+  loadLink(marketsUrl, { as: 'fetch', crossorigin: 'anonymous', rel: 'preload' });
+}
+
+async function decorateDocumentExtras() {
+  await decorateMeta(['footer-promo-tag', 'footer-source', 'gnav-source']);
+  await decorateHeader();
+  langBannerPromise = decorateLanguageBanner();
 }
 
 async function documentPostSectionLoading(config) {
@@ -1740,19 +2318,36 @@ const preloadBlockResources = (blocks = []) => blocks.map((block) => {
   return hasStyles && new Promise((resolve) => { loadStyle(`${blockPath}.css`, resolve); });
 }).filter(Boolean);
 
-async function resolveInlineFrags(section) {
-  const inlineFrags = [...section.el.querySelectorAll('a[href*="#_inline"]')];
-  if (!inlineFrags.length) return;
-  const { default: loadInlineFrags } = await import('../blocks/fragment/fragment.js');
-  const fragPromises = inlineFrags.map((link) => loadInlineFrags(link));
-  await Promise.all(fragPromises);
-  const newlyDecoratedSection = decorateSection(section.el, section.idx);
-  section.blocks = newlyDecoratedSection.blocks;
-  section.preloadLinks = newlyDecoratedSection.preloadLinks;
+async function loadFragments(section, selector) {
+  const anchors = [...section.querySelectorAll(selector)];
+  if (!anchors.length) return false;
+
+  const { default: loadFragment } = await import('../blocks/fragment/fragment.js');
+  await Promise.all(anchors.map((anchor) => loadFragment(anchor)));
+  return true;
+}
+
+async function resolveHighPriorityFragments(section) {
+  section.el.querySelectorAll('a[data-mep-lingo-block-swap], a[href*="#_inline"][data-mep-lingo]').forEach((a) => {
+    const bName = a.dataset.mepLingoBlockSwap;
+    const block = bName ? a.closest(`.${bName}`) : a.closest('.section > div[class]');
+    if (block?.classList.contains('hide-block')) block.remove();
+  });
+
+  // Load in cascading order: section swaps → block swaps → inline fragments
+  const hadSectionSwaps = await loadFragments(section.el, 'a[data-mep-lingo-section-swap]');
+  const hadBlockSwaps = await loadFragments(section.el, 'a[data-mep-lingo-block-swap]');
+  const hadInlineFrags = await loadFragments(section.el, 'a[href*="#_inline"]');
+
+  if (hadSectionSwaps || hadBlockSwaps || hadInlineFrags) {
+    const redecorated = await decorateSection(section.el, section.idx);
+    section.blocks = redecorated.blocks;
+    section.preloadLinks = redecorated.preloadLinks;
+  }
 }
 
 async function processSection(section, config, isDoc, lcpSectionId) {
-  await resolveInlineFrags(section);
+  await resolveHighPriorityFragments(section);
   const isLcpSection = lcpSectionId === section.idx;
   const stylePromises = isLcpSection ? preloadBlockResources(section.blocks) : [];
   preloadBlockResources(section.preloadLinks);
@@ -1769,6 +2364,8 @@ async function processSection(section, config, isDoc, lcpSectionId) {
 
   section.blocks.forEach((block) => loadBlocks.push(loadBlock(block)));
 
+  if (isLcpSection && langBannerPromise) await langBannerPromise;
+
   // Only move on to the next section when all blocks are loaded.
   await Promise.all(loadBlocks);
 
@@ -1778,31 +2375,53 @@ async function processSection(section, config, isDoc, lcpSectionId) {
   return section.blocks;
 }
 
+function loadLingoIndexes(area = document) {
+  const config = getConfig();
+  const { locale } = config || {};
+  if (locale?.base || locale?.base === '') {
+    loadQueryIndexes(config.locale.prefix, false, [...area.querySelectorAll('.section a')].map((a) => a.href).filter(Boolean));
+    return;
+  }
+  getMepLingoPrefix().then((prefix) => {
+    if (prefix) {
+      loadQueryIndexes(prefix, true, [...area.querySelectorAll('.section a')].map((a) => a.href).filter(Boolean));
+    }
+  });
+}
+
 export async function loadArea(area = document) {
   const isDoc = area === document;
   if (isDoc) {
     if (document.getElementById('page-load-ok-milo')) return;
     setCountry();
+    if (lingoActive()) preloadMarketsConfig();
     await checkForPageMods();
     appendHtmlToCanonicalUrl();
     appendSuffixToTitles();
   }
   const config = getConfig();
+  const isLingoActive = lingoActive();
+
   if (!langConfig && (config.languages || hasLanguageLinks(area))) {
     await loadLanguageConfig();
   }
 
   if (isDoc) {
-    decorateDocumentExtras();
+    await decorateDocumentExtras();
+    initModalEventListener();
   }
 
-  const sections = decorateSections(area, isDoc);
+  const htmlSections = [...area.querySelectorAll(isDoc ? 'body > main > div' : ':scope > div')];
+  htmlSections.forEach((section) => { section.className = 'section'; section.dataset.status = 'pending'; });
+
+  if (isLingoActive) loadLingoIndexes(area);
 
   const areaBlocks = [];
   let lcpSectionId = null;
 
-  for (const section of sections) {
-    const isLastSection = section.idx === sections.length - 1;
+  for (const htmlSection of htmlSections) {
+    const section = await decorateSection(htmlSection, htmlSections.indexOf(htmlSection));
+    const isLastSection = section.idx === htmlSections.length - 1;
     if (lcpSectionId === null && (section.blocks.length !== 0 || isLastSection)) {
       lcpSectionId = section.idx;
     }
@@ -1853,7 +2472,7 @@ export function loadLana(options = {}) {
   if (window.lana) return;
 
   const lanaError = (e) => {
-    window.lana?.log(e.reason || e.error || e.message, { errorType: 'i' });
+    window.lana?.log(e.reason || e.error || e.message, { errorType: 'i', severity: 'error' });
   };
 
   window.lana = {

@@ -4,7 +4,6 @@ import { getMetadata } from '../section-metadata/section-metadata.js';
 import { processTrackingLabels } from '../../martech/attributes.js';
 import {
   initService,
-  loadLitDependency,
   loadMasComponent,
   MAS_MERCH_CARD,
   MAS_MERCH_QUANTITY_SELECT,
@@ -90,7 +89,10 @@ export async function loadMnemonicList(foreground) {
       .then(({ decorateMnemonicList }) => decorateMnemonicList(foreground));
     await Promise.all([stylePromise, loadModule]);
   } catch (err) {
-    window.lana?.log(`Failed to load mnemonic list module: ${err}`);
+    window.lana?.log(`Failed to load mnemonic list module: ${err}`, {
+      tags: 'merch-card',
+      severity: 'error',
+    });
   }
 }
 
@@ -623,9 +625,6 @@ export default async function init(el) {
   const isMultiOfferCard = MULTI_OFFER_CARDS.includes(cardType);
   const hasOfferSelection = el.querySelector('ul');
   const hasQuantitySelect = el.querySelector('.merch-offers');
-
-  // Load lit first as it's needed by MAS components
-  await loadLitDependency();
 
   const componentPromises = [loadMasComponent(MAS_MERCH_CARD)];
 

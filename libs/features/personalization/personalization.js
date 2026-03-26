@@ -7,9 +7,10 @@ import {
   getConfig,
   loadLink,
   loadScript,
-  localizeLink,
+  localizeLinkAsync,
   getFederatedUrl,
   isSignedOut,
+  getCountry,
 } from '../../utils/utils.js';
 import {
   getConsentState,
@@ -106,7 +107,7 @@ export const normalizePath = (p, localize = true) => {
 
   try {
     const url = new URL(path);
-    const { hash, pathname } = url;
+    const { hash, pathname, search } = url;
     const firstFolder = pathname.split('/')[1];
     const mepHash = '#_dnt';
 
@@ -116,17 +117,17 @@ export const normalizePath = (p, localize = true) => {
       || path.includes('.adobe.')
       || path.includes('localhost:')) {
       if (!localize
-        || config.locale.ietf === 'en-US'
-        || hash.includes(mepHash)
+        || config.locale?.ietf === 'en-US'
+        || hash?.includes(mepHash)
         || firstFolder in config.locales
-        || path.includes('.json')) {
+        || path?.includes('.json')) {
         path = pathname;
       } else {
-        path = `${config.locale.prefix}${pathname}`;
+        path = `${config.locale.prefix}${normalizePath(pathname)}`;
       }
     }
     path = isFederal ? getFederatedUrl(path) : path;
-    return `${path}${hash.replace(mepHash, '')}`;
+    return `${path}${search}${hash.replace(mepHash, '')}`;
   } catch (e) {
     path = isFederal ? getFederatedUrl(path) : path;
     return path;
@@ -157,6 +158,7 @@ const CREATE_CMDS = {
 const COMMANDS_KEYS = {
   remove: 'remove',
   replace: 'replace',
+  analyticIfSeen: 'analyticifseen',
   updateAttribute: 'updateattribute',
 };
 
@@ -193,7 +195,7 @@ const getUpdatedHref = (el, content, action) => {
   return newContent;
 };
 
-const createFrag = (el, action, content, manifestId, targetManifestId) => {
+const createFrag = async (el, action, content, manifestId, targetManifestId) => {
   if (action === 'replace') el.classList.add(CLASS_EL_DELETE, CLASS_EL_REPLACE);
   let href = content;
   try {
@@ -210,12 +212,15 @@ const createFrag = (el, action, content, manifestId, targetManifestId) => {
   const isDelayedModalAnchor = /#.*delay=/.test(href);
   if (isDelayedModalAnchor) frag.classList.add('hide-block');
   if (isInLcpSection(el)) {
-    loadLink(`${localizeLink(a.href)}.plain.html`, { as: 'fetch', crossorigin: 'anonymous', rel: 'preload' });
+    loadLink(`${await localizeLinkAsync(a.href)}.plain.html`, { as: 'fetch', crossorigin: 'anonymous', rel: 'preload' });
   }
   return frag;
 };
 
-export const createContent = (el, { content, manifestId, targetManifestId, action, modifiers }) => {
+export const createContent = async (
+  el,
+  { content, manifestId, targetManifestId, action, modifiers },
+) => {
   if (action === 'replace') {
     addIds(el, manifestId, targetManifestId);
   }
@@ -238,7 +243,7 @@ export const createContent = (el, { content, manifestId, targetManifestId, actio
     return container;
   }
 
-  const frag = createFrag(el, action, content, manifestId, targetManifestId);
+  const frag = await createFrag(el, action, content, manifestId, targetManifestId);
   addIds(frag, manifestId, targetManifestId);
   if (el?.parentElement.nodeName !== 'MAIN') return frag;
   return createTag('div', undefined, frag);
@@ -257,17 +262,56 @@ export const handleTwpButtons = (el, selector) => {
   }
 };
 
+function fireAnalyticsEvent(val) {
+  window._satellite?.track?.('event', {
+    documentUnloading: true,
+    xdm: {
+      eventType: 'web.webinteraction.linkClicks',
+      web: {
+        webInteraction: {
+          linkClicks: { value: 1 },
+          type: 'other',
+          name: val,
+        },
+      },
+    },
+    data:
+      { _adobe_corpnew: { digitalData: { primaryEvent: { eventInfo: { eventName: val } } } } },
+  });
+}
+
+function sendAnalytics(val) {
+  if (window._satellite?.track) {
+    fireAnalyticsEvent(val);
+  } else {
+    window.addEventListener('alloy_sendEvent', () => {
+      fireAnalyticsEvent(val);
+    }, { once: true });
+  }
+}
+
 const COMMANDS = {
   [COMMANDS_KEYS.remove]: (el, { content, selector }) => {
     if (content !== 'false') el.classList.add(CLASS_EL_DELETE);
     handleTwpButtons(el, selector);
   },
-  [COMMANDS_KEYS.replace]: (el, cmd) => {
+  [COMMANDS_KEYS.replace]: async (el, cmd) => {
     if (!el || el.classList.contains(CLASS_EL_REPLACE)) return;
     el.insertAdjacentElement(
       'beforebegin',
-      createContent(el, cmd),
+      await createContent(el, cmd),
     );
+  },
+  [COMMANDS_KEYS.analyticIfSeen]: (el, cmd) => {
+    if (!el || !cmd.content) return;
+
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        sendAnalytics(`${cmd.content} was seen`);
+        observer.unobserve(el);
+      }
+    });
+    observer.observe(el);
   },
   [COMMANDS_KEYS.updateAttribute]: (el, cmd) => {
     const { manifestId, targetManifestId } = cmd;
@@ -294,6 +338,7 @@ const COMMANDS = {
       }
     } else {
       value = cmd.content;
+      if (attribute === 'href') value = normalizePath(value);
     }
 
     if (value) {
@@ -445,6 +490,14 @@ function registerInBlockActions(command) {
         const { fragments } = config.mep.inBlock[blockName];
         command.content = getFragmentId(command.content);
         fragments[blockSelector] = command;
+        let overridesParent = document.querySelector('div.mas-overrides');
+        if (!overridesParent) {
+          overridesParent = createTag('div', { style: 'display: none;', class: 'mas-overrides' });
+          document.body.appendChild(overridesParent);
+        }
+        if (!overridesParent.querySelector(`aem-fragment[fragment="${command.content}"]`)) {
+          overridesParent.appendChild(createTag('aem-fragment', { fragment: command.content }));
+        }
       }
       return;
     }
@@ -632,6 +685,10 @@ export const updateFragDataProps = (a, inline, sections, fragment) => {
   if (inline) {
     if (manifestId) setDataIdOnChildren(sections, 'manifestId', manifestId);
     if (adobeTargetTestid) setDataIdOnChildren(sections, 'adobeTargetTestid', adobeTargetTestid);
+    if (fragment.dataset.mepLingoRoc) setDataIdOnChildren(sections, 'mepLingoRoc', fragment.dataset.mepLingoRoc);
+    if (fragment.dataset.mepLingoFallback) {
+      setDataIdOnChildren(sections, 'mepLingoFallback', fragment.dataset.mepLingoFallback);
+    }
   } else {
     addIds(fragment, manifestId, adobeTargetTestid);
   }
@@ -653,7 +710,7 @@ export function addSectionAnchors(rootEl = document) {
   });
 }
 
-export function handleCommands(
+export async function handleCommands(
   commands,
   rootEl = document,
   forceInline = false,
@@ -661,47 +718,50 @@ export function handleCommands(
 ) {
   const section1 = document.querySelector('main > div');
   addSectionAnchors(rootEl);
-  commands.forEach((cmd) => {
-    const { action, content, selector } = cmd;
-    cmd.content = forceInline && getSelectorType(content) === SELECTOR_TYPES.fragment
-      ? addHash(content, INLINE_HASH)
-      : content;
+  for (const cmd of commands) {
+    const { action, selector } = cmd;
+    if (forceInline
+      && action !== 'updateattribute'
+      && getSelectorType(cmd.content) === SELECTOR_TYPES.fragment
+      && !cmd.content.includes(INLINE_HASH)) {
+      cmd.content = addHash(cmd.content, INLINE_HASH);
+    }
     if (selector.startsWith(IN_BLOCK_SELECTOR_PREFIX)) {
       registerInBlockActions(cmd);
       cmd.selectorType = IN_BLOCK_SELECTOR_PREFIX;
-      return;
-    }
-    const {
-      els,
-      modifiers,
-      attribute,
-    } = getSelectedElements(selector, rootEl, forceRootEl, action);
+    } else {
+      const {
+        els,
+        modifiers,
+        attribute,
+      } = getSelectedElements(selector, rootEl, forceRootEl, action);
 
-    Object.assign(cmd, { modifiers, attribute });
+      Object.assign(cmd, { modifiers, attribute });
 
-    els?.forEach((el) => {
-      if (!el
-        || (!(action in COMMANDS) && !(action in CREATE_CMDS))
-        || (rootEl && !rootEl.contains(el))
-        || (isPostLCP && section1?.contains(el))) return;
-
-      if (action in COMMANDS) {
-        COMMANDS[action](el, cmd);
-        return;
+      for (const el of els || []) {
+        if (el
+          && (action in COMMANDS || action in CREATE_CMDS)
+          && (!rootEl || rootEl.contains(el))
+          && (!isPostLCP || !section1?.contains(el))) {
+          if (action in COMMANDS) {
+            await COMMANDS[action](el, cmd);
+          } else {
+            const insertAnchor = getSelectorType(selector) === SELECTOR_TYPES.fragment
+              ? el.parentElement
+              : el;
+            insertAnchor?.insertAdjacentElement(
+              CREATE_CMDS[action],
+              await createContent(insertAnchor, cmd),
+            );
+          }
+        }
       }
-      const insertAnchor = getSelectorType(selector) === SELECTOR_TYPES.fragment
-        ? el.parentElement
-        : el;
-      insertAnchor?.insertAdjacentElement(
-        CREATE_CMDS[action],
-        createContent(insertAnchor, cmd),
-      );
-    });
-    if ((els.length && !cmd.modifiers.includes(FLAGS.all))
-      || !cmd.modifiers.includes(FLAGS.includeFragments)) {
-      cmd.completed = true;
+      if ((els.length && !cmd.modifiers.includes(FLAGS.all))
+        || !cmd.modifiers.includes(FLAGS.includeFragments)) {
+        cmd.completed = true;
+      }
     }
-  });
+  }
   deleteMarkedEls(rootEl);
   return commands.filter((cmd) => !cmd.completed
     && cmd.selectorType !== IN_BLOCK_SELECTOR_PREFIX);
@@ -842,8 +902,8 @@ function hasCountryMatch(str, config) {
   }
   return false;
 }
-/* c8 ignore start */
-export function parsePlaceholders(placeholders, config, selectedVariantName = '') {
+
+export function parsePlaceholders(placeholders, config, selectedVariantName = '', pathname = new URL(window.location).pathname) {
   if (!placeholders?.length || selectedVariantName === 'default') return config;
   const { countryIP, countryChoice } = config.mep || {};
   const valueNames = [
@@ -864,15 +924,23 @@ export function parsePlaceholders(placeholders, config, selectedVariantName = ''
   });
   const key = keyVal?.[0];
 
+  const seenKeys = new Set();
+  const filteredPlaceholders = placeholders.filter((item) => {
+    const pageFilter = item['page filter'] || item['page filter (optional)'];
+    if (seenKeys.has(item.key) || (pageFilter && !matchGlob(pageFilter, pathname))) return false;
+    seenKeys.add(item.key);
+    return true;
+  });
+
   if (key) {
-    const results = placeholders.reduce((res, item) => {
+    const results = filteredPlaceholders.reduce((res, item) => {
       res[item.key] = item[key];
       return res;
     }, {});
     config.placeholders = { ...(config.placeholders || {}), ...results };
   }
 
-  createMartechMetadata(placeholders, config, key);
+  createMartechMetadata(filteredPlaceholders, config, key);
 
   return config;
 }
@@ -950,7 +1018,7 @@ function normCountry(country) {
 async function setMepCountry(config) {
   const urlParams = new URLSearchParams(window.location.search);
   const country = urlParams.get('country') || (document.cookie.split('; ').find((row) => row.startsWith('international='))?.split('=')[1]);
-  const akamaiCode = urlParams.get('akamaiLocale')?.toLowerCase() || sessionStorage.getItem('akamai');
+  const akamaiCode = await getCountry(true);
   config.mep = config.mep || {};
   if (country) {
     config.mep.countryChoice = normCountry(country);
@@ -1113,6 +1181,15 @@ export function canServeManifest(manifestConfig) {
   return true;
 }
 
+export function sendMktgTracking(fileName, mktgAction) {
+  if (!mktgAction?.startsWith('marketing')) return false;
+  const { advertising } = getConfig().mep.consentState;
+  if (!advertising) return false;
+  const eventName = `${fileName} was served`;
+  sendAnalytics(eventName);
+  return eventName;
+}
+
 async function getManifestConfig(info, variantOverride) {
   const {
     name,
@@ -1126,7 +1203,7 @@ async function getManifestConfig(info, variantOverride) {
     event,
     source,
   } = info;
-  if (disabled && (!variantOverride || !Object.keys(variantOverride).length)) {
+  if (disabled && !variantOverride?.[normalizePath(manifestPath)]) {
     return createDefaultExperiment(info);
   }
   let data = manifestData;
@@ -1155,11 +1232,12 @@ async function getManifestConfig(info, variantOverride) {
     'manifest-type': ['Personalization', 'Promo', 'Test'],
     'manifest-execution-order': ['First', 'Normal', 'Last'],
   };
+  const fileName = getFileName(manifestPath).replace('.json', '');
   if (infoTab) {
     manifestConfig.manifestType = infoObj?.['manifest-type']?.toLowerCase();
     if (manifestConfig.manifestType === TRACKED_MANIFEST_TYPE) {
       manifestConfig.manifestOverrideName = manifestOverrideName;
-      const analytics = manifestOverrideName || getFileName(manifestPath).replace('.json', '');
+      const analytics = manifestOverrideName || fileName;
       manifestConfig.analyticsTitle = analytics.trim().slice(0, 15);
     }
     const executionOrder = {
@@ -1185,8 +1263,11 @@ async function getManifestConfig(info, variantOverride) {
   manifestConfig.manifestPath = normalizePath(manifestPath);
   const isAllowed = canServeManifest(manifestConfig);
   if (!isAllowed) {
+    overrideVariant(normalizePath(manifestPath), 'Default');
     if (!getConfig().mep?.preview) return null;
     finalDisabled = true;
+  } else {
+    sendMktgTracking(fileName, manifestConfig.mktgAction);
   }
 
   manifestConfig.selectedVariantName = await getPersonalizationVariant(
@@ -1280,6 +1361,7 @@ export function cleanAndSortManifestList(manifests, config = getConfig()) {
 
         if (targetManifestWinsOverServerManifest) {
           freshManifest.variants = fullManifest.variants;
+          freshManifest.variantNames = fullManifest.variantNames;
           freshManifest.placeholderData = fullManifest.placeholderData;
         }
 
@@ -1367,18 +1449,20 @@ export async function applyPers({ manifests }) {
     addIds(main, manifestId, targetManifestId);
   }
 
-  config.mep.commands = handleCommands(config.mep.commands);
+  config.mep.commands = await handleCommands(config.mep.commands);
 
   const pznList = results.filter((r) => (r.experiment?.manifestType === TRACKED_MANIFEST_TYPE));
   if (!pznList.length) return;
 
   const pznVariants = pznList.map((r) => {
     const val = r.experiment.selectedVariantName.replace(TARGET_EXP_PREFIX, '').trim().slice(0, 15);
-    const arr = val.split(':');
-    if (arr.length > 2 || arr[0]?.trim() === '' || arr[1]?.trim() === '') {
+    // Handle cases without colons or starting with colon (no nickname)
+    if (!val.includes(':') || val.startsWith(':')) return val === 'default' ? 'nopzn' : val;
+    // Validate nickname syntax: "nickname: audience"
+    const arr = val.split(':', 2);
+    if (arr[0]?.trim() === '' || arr[1]?.trim() === '') {
       log('MEP Error: When using (optional) column nicknames, please use the following syntax: "<nickname>: <original audience>"');
     }
-    if (!val.includes(':') || val.startsWith(':')) return val === 'default' ? 'nopzn' : val;
     return arr[0].trim();
   });
   const pznManifests = pznList.map((r) => r.experiment.analyticsTitle);
@@ -1478,24 +1562,7 @@ function sendTargetResponseAnalytics(failure, responseStart, timeoutLocal, messa
   const timeoutTime = roundToQuarter(timeoutLocal);
   let val = `target response time ${responseTime}:timed out ${failure}:timeout ${timeoutTime}`;
   if (message) val += `:${message}`;
-  // eslint-disable-next-line no-underscore-dangle
-  window.addEventListener('alloy_sendEvent', () => {
-    window._satellite?.track?.('event', {
-      documentUnloading: true,
-      xdm: {
-        eventType: 'web.webinteraction.linkClicks',
-        web: {
-          webInteraction: {
-            linkClicks: { value: 1 },
-            type: 'other',
-            name: val,
-          },
-        },
-      },
-      data:
-        { _adobe_corpnew: { digitalData: { primaryEvent: { eventInfo: { eventName: val } } } } },
-    });
-  }, { once: true });
+  sendAnalytics(val);
 }
 
 const handleAlloyResponse = (response) => ((response.propositions || response.decisions))

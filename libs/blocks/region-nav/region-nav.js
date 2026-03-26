@@ -1,13 +1,10 @@
-import { getConfig, getLanguage, getLocale, loadLanguageConfig } from '../../utils/utils.js';
+import {
+  getConfig, getLanguage, getLocale, loadLanguageConfig, setInternational, getCountry,
+} from '../../utils/utils.js';
+
+let config;
 
 const queriedPages = [];
-
-function setInternational(prefix) {
-  const domain = window.location.host.endsWith('.adobe.com') ? 'domain=adobe.com' : '';
-  const maxAge = 365 * 24 * 60 * 60; // max-age in seconds for 365 days
-  document.cookie = `international=${prefix};max-age=${maxAge};path=/;${domain}`;
-  sessionStorage.setItem('international', prefix);
-}
 
 function handleEvent({ prefix, link, callback } = {}) {
   if (typeof callback !== 'function') return;
@@ -63,7 +60,15 @@ export function decorateLink(link, path, localeToLanguageMap = []) {
         handleEvent({
           prefix,
           link,
-          callback: (newHref) => {
+          callback: async (newHref) => {
+            if (config.lingoProjectSuccessLogging === 'on') {
+              const country = await getCountry();
+              window.lana.log(`Click: Region_Nav_Modal|locale:${config.locale.prefix?.replace('/', '') || 'us'}|country:${country}`, {
+                sampleRate: 10,
+                tags: 'lingo,lingo-region-nav-click',
+                severity: 'i',
+              });
+            }
             link.href = newHref;
             hrefAdapted = true;
           },
@@ -79,7 +84,15 @@ export function decorateLink(link, path, localeToLanguageMap = []) {
     handleEvent({
       prefix,
       link,
-      callback: (newHref) => {
+      callback: async (newHref) => {
+        if (config.lingoProjectSuccessLogging === 'on') {
+          const country = await getCountry();
+          window.lana.log(`Click: Region_Nav_Modal|locale:${config.locale.prefix?.replace('/', '') || 'us'}|country:${country}`, {
+            sampleRate: 10,
+            tags: 'lingo,lingo-region-nav-click',
+            severity: 'i',
+          });
+        }
         window.open(newHref, e.ctrlKey || e.metaKey ? '_blank' : '_self');
       },
     });
@@ -88,7 +101,7 @@ export function decorateLink(link, path, localeToLanguageMap = []) {
 
 export default async function init(block) {
   const { localeToLanguageMap } = await loadLanguageConfig();
-  const config = getConfig();
+  config = getConfig();
   const divs = block.querySelectorAll(':scope > div');
   if (divs.length < 2) return;
   const links = divs[1].querySelectorAll('a');
@@ -98,4 +111,8 @@ export default async function init(block) {
   const hasPrefix = location.pathname.startsWith(`${prefix}/`);
   const path = location.href.replace(location.origin + (hasPrefix ? prefix : ''), '').replace('#langnav', '');
   links.forEach((link) => decorateLink(link, path, localeToLanguageMap));
+  if (config.lingoProjectSuccessLogging === 'on') {
+    const country = await getCountry();
+    window.lana.log(`Load: Region_Nav_Modal|locale:${config.locale.prefix?.replace('/', '') || 'us'}|country:${country}`, { sampleRate: 10, tags: 'lingo,lingo-region-nav-load', severity: 'i' });
+  }
 }

@@ -17,7 +17,7 @@ import {
   parseEncodedConfig,
   loadScript,
   loadLink,
-  localizeLink,
+  localizeLinkAsync,
   createTag,
   getConfig,
   createIntersectionObserver,
@@ -54,12 +54,15 @@ export const formValidate = (formEl) => {
   formEl.classList.add('show-warnings');
 };
 
-export const decorateURL = (destination, baseURL = window.location) => {
+export const decorateURL = async (destination, baseURL = window.location) => {
   if (!(destination.startsWith('http') || destination.startsWith('/'))) return null;
 
   try {
     let destinationUrl = new URL(destination, baseURL.origin);
     const { hostname, pathname, search, hash } = destinationUrl;
+
+    const { htmlExclude } = getConfig();
+    const exclude = htmlExclude?.some((excludeRe) => excludeRe.test(destinationUrl));
 
     /* c8 ignore next 3 */
     if (!hostname) {
@@ -70,11 +73,11 @@ export const decorateURL = (destination, baseURL = window.location) => {
       destinationUrl = new URL(`${pathname}${search}${hash}`, baseURL.origin);
     }
 
-    if (baseURL.pathname.endsWith('.html') && !pathname.endsWith('.html') && !pathname.endsWith('/')) {
+    if (baseURL.pathname.endsWith('.html') && !pathname.endsWith('.html') && !pathname.endsWith('/') && !exclude) {
       destinationUrl.pathname = `${pathname}.html`;
     }
 
-    const localized = localizeLink(destinationUrl.href, null, true);
+    const localized = await localizeLinkAsync(destinationUrl.href, null, true);
     destinationUrl.pathname = new URL(localized, baseURL.origin).pathname;
 
     return destinationUrl.href;
@@ -341,7 +344,7 @@ function decorateForm(el, formData) {
   }
 }
 
-export default function init(el) {
+export default async function init(el) {
   const children = Array.from(el.querySelectorAll(':scope > div'));
   const encodedConfigDiv = children.shift();
   const link = encodedConfigDiv.querySelector('a');
@@ -387,7 +390,7 @@ export default function init(el) {
   formData[SUCCESS_TYPE] = formData[SUCCESS_TYPE] || 'redirect';
 
   if (formData[SUCCESS_TYPE] === 'redirect') {
-    const destinationUrl = decorateURL(formData[SUCCESS_CONTENT]);
+    const destinationUrl = await decorateURL(formData[SUCCESS_CONTENT]);
 
     if (destinationUrl) formData[SUCCESS_CONTENT] = destinationUrl;
   }

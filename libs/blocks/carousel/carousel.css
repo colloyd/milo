@@ -38,6 +38,10 @@
   overflow: hidden;
 }
 
+.carousel .carousel-expand {
+  z-index: 2;
+}
+
 .carousel .carousel-expand img {
   background-color: var(--carousel-expand-background-color);
   box-sizing: content-box;
@@ -138,6 +142,26 @@
 .carousel.dark .carousel-previous path,
 .carousel.dark .carousel-next path {
   fill: var(--color-white);
+}
+
+/* Disable-buttons: disabled state and pointer-events for all viewports */
+.carousel.dark.disable-circular-nav .carousel-button.disabled:hover,
+.carousel.dark.disable-circular-nav .carousel-button.disabled:active,
+.dark .carousel.disable-circular-nav .carousel-button.disabled:hover,
+.dark .carousel.disable-circular-nav .carousel-button.disabled:active,
+.carousel.disable-circular-nav .carousel-button.disabled:hover,
+.carousel.disable-circular-nav .carousel-button.disabled:active,
+.carousel.dark.disable-circular-nav .carousel-button.disabled,
+.dark .carousel.disable-circular-nav .carousel-button.disabled,
+.carousel.disable-circular-nav .carousel-button.disabled {
+  background-color: var(--carousel-nav-background-dark);
+  pointer-events: none;
+}
+
+.dark .carousel.disable-circular-nav .carousel-button.disabled path,
+.carousel.dark.disable-circular-nav .carousel-button.disabled path,
+.carousel.disable-circular-nav .carousel-button.disabled path {
+  fill: var(--carousel-nav-button-background-active-focus);
 }
 
 .carousel .carousel-previous svg {
@@ -400,6 +424,26 @@ html[dir="rtl"] .carousel .move-indicators {
   border: none;
 }
 
+.carousel.lightbox .carousel-close circle {
+  fill: var(--modal-close-accent-color);
+}
+
+.carousel.lightbox .carousel-close line {
+  stroke: var(--color-white);
+}
+
+.carousel.lightbox .carousel-close:focus-visible {
+  outline: 2px solid var(--modal-focus-color);
+}
+
+.carousel.lightbox .carousel-close:focus-visible circle {
+  fill: var(--color-white);
+}
+
+.carousel.lightbox .carousel-close:focus-visible line {
+  stroke: var(--modal-close-accent-color);
+}
+
 .carousel.lightbox .carousel-close:focus-visible {
   outline: none;
 }
@@ -589,6 +633,25 @@ html[dir="rtl"] .carousel .move-indicators {
     transform: translateX(65%);
   }
 
+  .carousel.dark.disable-buttons .carousel-button.disabled:hover,
+  .carousel.dark.disable-buttons .carousel-button.disabled:active,
+  .dark .carousel.disable-buttons .carousel-button.disabled:hover,
+  .dark .carousel.disable-buttons .carousel-button.disabled:active,
+  .carousel.disable-buttons .carousel-button.disabled:hover,
+  .carousel.disable-buttons .carousel-button.disabled:active,
+  .carousel.dark.disable-buttons .carousel-button.disabled,
+  .dark .carousel.disable-buttons .carousel-button.disabled,
+  .carousel.disable-buttons .carousel-button.disabled {
+    background-color: var(--carousel-nav-background-dark);
+    cursor: not-allowed;
+  }
+
+  .dark .carousel.disable-buttons .carousel-button.disabled path,
+  .carousel.dark.disable-buttons .carousel-button.disabled path,
+  .carousel.disable-buttons .carousel-button.disabled path {
+    fill: var(--carousel-nav-button-background-active-focus);
+  }
+
   .carousel.hinting-center-mobile .carousel-slide {
     flex-basis: 75%;
     min-width: 276px;
@@ -607,25 +670,6 @@ html[dir="rtl"] .carousel .move-indicators {
   .carousel.hinting-center-mobile .carousel-slides.is-ready.is-reversing {
     transform: translateX(calc((0.3rem) * -1));
   }
-
-  .carousel.dark.disable-buttons .carousel-button.disabled:hover,
-  .carousel.dark.disable-buttons .carousel-button.disabled:active,
-  .dark .carousel.disable-buttons .carousel-button.disabled:hover,
-  .dark .carousel.disable-buttons .carousel-button.disabled:active,
-  .carousel.disable-buttons .carousel-button.disabled:hover,
-  .carousel.disable-buttons .carousel-button.disabled:active,
-  .carousel.dark.disable-buttons .carousel-button.disabled,
-  .dark .carousel.disable-buttons .carousel-button.disabled,
-  .carousel.disable-buttons .carousel-button.disabled {
-    background-color: var(--carousel-nav-background-dark);
-  }
-
-  .dark .carousel.disable-buttons .carousel-button.disabled path,
-  .carousel.dark.disable-buttons .carousel-button.disabled path,
-  .carousel.disable-buttons .carousel-button.disabled path {
-    fill: var(--carousel-nav-button-background-active-focus);
-  }
-
 
   .carousel.disable-buttons .carousel-slides {
     align-items: center;
@@ -844,6 +888,7 @@ html[dir="rtl"] .carousel .move-indicators {
 
   .carousel[class*='show-'].ups-desktop:has(.editorial-card) .carousel-slides.is-ready {
     flex-wrap: wrap;
+    flex-direction: row;
     align-items: stretch;
     transform: none;
     left: initial;
@@ -867,4 +912,12 @@ html[dir="rtl"] .carousel .move-indicators {
   width: 0;
   height: 0;
   overflow: hidden;
+}
+
+:root:has(meta[name="theme"][content="max25"]) {
+  @media (min-width: 900px) {
+    .carousel.show-2.ups-desktop.m-gap .carousel-slides {
+      gap: 44px var(--spacing-s);
+    }
+  }
 }

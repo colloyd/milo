@@ -1,6 +1,8 @@
 import { getConfig, getFederatedContentRoot } from '../../../utils/utils.js';
-import { fetchPreflightChecks } from './asoApi.js';
+import { fetchPreflightChecks, asoCache } from './asoApi.js';
 import { isViewportTooSmall, checkImageDimensions, runChecks as runChecksAssets } from './assets.js';
+import runChecksAccessibility from './accessibility.js';
+import captureMetrics from './captureMetrics.js';
 import {
   getLcpEntry,
   checkSingleBlock,
@@ -24,10 +26,15 @@ import {
   checkLinks,
   runChecks as runChecksSeo,
 } from './seo.js';
+import { runChecks as runChecksStructure } from './structure.js';
+import { SEVERITY } from './constants.js';
 
 let checksSuite = null;
 
+const globalPreflightCache = new Map();
+
 export default {
+  accessibility: { runChecks: runChecksAccessibility },
   assets: {
     isViewportTooSmall,
     checkImageDimensions,
@@ -56,6 +63,7 @@ export default {
     checkLinks,
     runChecks: runChecksSeo,
   },
+  structure: { runChecks: runChecksStructure },
 };
 
 export const getChecksSuite = () => {
@@ -77,29 +85,82 @@ export const getChecksSuite = () => {
   });
 };
 
-const runChecks = async (url, area) => {
-  const isASO = (await getChecksSuite()) === 'ASO';
-  const assets = await Promise.all(runChecksAssets(url, area));
-  const performance = await Promise.all(runChecksPerformance(url, area));
-  const seo = isASO ? await fetchPreflightChecks() : runChecksSeo({ url, area });
-  return { assets, performance, seo };
+const isUrlExcluded = (url, exclusionPatterns = {}) => {
+  if (!exclusionPatterns.data) return false;
+
+  return exclusionPatterns.data.some((item) => {
+    const pattern = item.path;
+    if (!pattern) return false;
+
+    const regexPattern = pattern
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\\\*\\\*/g, '.*')
+      .replace(/\\\*/g, '[^/]*');
+    const regex = new RegExp(regexPattern);
+    return regex.test(url);
+  });
 };
 
-const processResults = (results) => {
-  const allResults = [
-    ...(results.assets || []),
-    ...(results.performance || []),
-    ...(results.seo || []),
-  ];
-
+const runChecks = async (url, area, injectVisualMetadata = false) => {
+  const isASO = (await getChecksSuite()) === 'ASO';
+  const accessibility = await Promise.all(runChecksAccessibility({ area }));
+  const assets = await Promise.all(runChecksAssets(url, area, injectVisualMetadata));
+  const performance = await Promise.all(runChecksPerformance(url, area));
+  const seo = isASO ? await fetchPreflightChecks() : runChecksSeo({ url, area });
+  const structure = await Promise.all(runChecksStructure({ area }));
   return {
-    isViewportTooSmall: isViewportTooSmall(),
-    runChecks: results,
-    hasFailures: allResults.some((result) => result.status === 'fail'),
+    accessibility,
+    assets,
+    performance,
+    seo,
+    structure,
   };
 };
 
-export async function getPreflightResults(url, area) {
-  const results = await runChecks(url, area);
-  return processResults(results);
+function generateCacheKey(url, injectVisualMetadata, isASO, asoAuthed) {
+  return `${url}_${injectVisualMetadata}_${isASO}_${asoAuthed}`;
+}
+
+export async function getPreflightResults(options = {}) {
+  const {
+    url = window.location.href,
+    area = document,
+    useCache = true,
+    injectVisualMetadata = false,
+  } = options;
+
+  const excludedURLS = await fetch(`${getFederatedContentRoot()}/federal/preflight/preflight-config.json?sheet=preflight-exclusions`)
+    .then((res) => (res.ok ? res.json() : null))
+    .catch(() => null);
+
+  if (isUrlExcluded(url, excludedURLS)) return null;
+
+  const isASO = (await getChecksSuite()) === 'ASO';
+  const asoAuthed = isASO ? !!asoCache.sessionToken : false;
+  const cacheKey = generateCacheKey(url, injectVisualMetadata, isASO, asoAuthed);
+
+  if (useCache && globalPreflightCache.has(cacheKey)) {
+    return globalPreflightCache.get(cacheKey);
+  }
+
+  const res = await runChecks(url, area, injectVisualMetadata);
+  const allResults = [
+    ...(res.accessibility || []),
+    ...(res.assets || []),
+    ...(res.performance || []),
+    ...(res.seo || []),
+    ...(res.structure || []),
+  ];
+
+  const result = {
+    isViewportTooSmall: isViewportTooSmall(),
+    runChecks: res,
+    hasFailures: allResults.some((check) => check.status === 'fail' && check.severity === SEVERITY.CRITICAL),
+  };
+
+  captureMetrics(res).catch((e) => window.lana?.log?.(`Preflight metrics capture failed: ${e}`, { tags: 'preflight' }));
+
+  if (useCache) globalPreflightCache.set(cacheKey, result);
+
+  return result;
 }

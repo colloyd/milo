@@ -9,7 +9,6 @@
 /libs/features/georouting/ @adobecom/milo-core
 /libs/features/georoutingv2/ @adobecom/milo-core
 /libs/features/icons/ @adobecom/milo-core
-/libs/features/mas/ @adobecom/tacocat
 /libs/features/personalization/ @adobecom/mep-squad
 /libs/features/seotech/ @adobecom/milo-core
 /libs/features/spectrum-web-components/ @adobecom/tacocat
@@ -45,6 +44,7 @@
 /libs/blocks/chart/ @meganthecoder @Brandon32 @JasonHowellSlavin
 /libs/blocks/columns/ @adobecom/milo-core
 /libs/blocks/commerce/ @adobecom/tacocat
+/libs/blocks/comparison-table/ @adobecom/milo-core
 /libs/blocks/editorial-card/ @adobecom/milo-core
 /libs/blocks/email-collection/ @adobecom/milo-core
 /libs/blocks/event-rich-results/ @adobecom/milo-core
@@ -102,6 +102,7 @@
 /libs/blocks/pdf-vewer/ @meganthecoder @JasonHowellSlavin @Brandon32
 /libs/blocks/preflight/ @adobecom/milo-core
 /libs/blocks/promo/ @adobecom/milo-core
+/libs/blocks/quick-facts/ @meganthecoder @JasonHowellSlavin @Brandon32
 /libs/blocks/quiz-marquee/ @colloyd @sabyamon @fullcolorcoder @JackySun9
 /libs/blocks/quiz-results/ @colloyd @sabyamon @fullcolorcoder @JackySun9
 /libs/blocks/quiz/ @colloyd @sabyamon @fullcolorcoder @JackySun9

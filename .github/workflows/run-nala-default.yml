@@ -46,8 +46,6 @@ jobs:
         uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
-          cache-dependency-path: '**/package-lock.json'
 
       # Cache node_modules
       - name: Cache node_modules
@@ -57,8 +55,6 @@ jobs:
             ~/.npm
             **/node_modules
           key: npm-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            npm-${{ runner.os }}-${{ matrix.node-version }}-
 
       # Cache Playwright browser binaries across runs
       - name: Cache Playwright browsers
@@ -71,7 +67,7 @@ jobs:
 
       # Install dependencies (cheap on cache hit, ensures Playwright is in node_modules)
       - name: Install dependencies
-        run: npm ci --no-audit --no-fund --prefer-offline
+        run: npm ci --no-fund --prefer-offline
 
       # Install only the browser needed for this matrix job (fast; uses the cache above)
       - name: Install Playwright (${{ matrix.browser }})
@@ -102,8 +98,11 @@ jobs:
           prBranch: ${{ github.event.pull_request.head.ref }}
           prBaseBranch: ${{ github.event.pull_request.base.ref }}
           GITHUB_ACTION_PATH: ${{ github.workspace }}
+          isFork: ${{ github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name }}
           IMS_EMAIL: ${{ secrets.IMS_EMAIL }}
           IMS_PASS: ${{ secrets.IMS_PASS }}
+          EMAIL_COLLECTION_IMS_MAIL: ${{ secrets.EMAIL_COLLECTION_IMS_MAIL }}
+          EMAIL_COLLECTION_IMS_PASS: ${{ secrets.EMAIL_COLLECTION_IMS_PASS }}
           PROJECT: ${{ matrix.project }}
           # SHARD: ${{ matrix.shard }}     # disabled for now
           # reporter: list,blob            # disabled for now (as it is driven from playwright.config.js)

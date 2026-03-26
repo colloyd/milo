@@ -23,6 +23,8 @@ const loadScript = () => Promise.resolve();
 
 const loadStyle = () => Promise.resolve();
 
+const getCountry = () => Promise.resolve();
+
 const createTag = (tag, attributes = {}) => {
   const element = document.createElement(tag);
   Object.entries(attributes).forEach(([key, value]) => {
@@ -33,7 +35,7 @@ const createTag = (tag, attributes = {}) => {
 
 const loadArea = () => Promise.resolve();
 
-const localizeLink = () => Promise.resolve();
+const localizeLinkAsync = () => Promise.resolve();
 
 const loadLink = () => Promise.resolve();
 
@@ -141,7 +143,8 @@ export {
   loadArea,
   loadScript,
   loadStyle,
-  localizeLink,
+  getCountry,
+  localizeLinkAsync,
   loadLink,
   mockOstDeps,
   unmockOstDeps,

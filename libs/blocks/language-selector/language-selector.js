@@ -1,4 +1,25 @@
-import { createTag, getConfig, getLanguage, loadLanguageConfig } from '../../utils/utils.js';
+/* eslint-disable no-underscore-dangle */
+import {
+  createTag, getConfig, getLanguage, loadLanguageConfig, setInternational, getMetadata, getCountry,
+} from '../../utils/utils.js';
+
+function sendAnalyticsEvent(eventName, type = 'click') {
+  if (window._satellite?.track) {
+    window._satellite.track('event', {
+      xdm: {},
+      data: {
+        eventType: 'web.webinteraction.linkClicks',
+        web: {
+          webInteraction: {
+            name: eventName,
+            linkClicks: { value: 1 },
+            type,
+          },
+        },
+      },
+    });
+  }
+}
 
 const queriedPages = [];
 const CHECKMARK_SVG = '<svg class="check-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.3337 4L6.00033 11.3333L2.66699 8" stroke="#274DEA" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -39,12 +60,14 @@ function stripQueryAndHash(url) {
 
 function handleEvent({ prefix, link, callback } = {}) {
   if (typeof callback !== 'function') return;
+  const { baseSitePath } = getConfig();
+  const fallbackUrl = `${prefix ? `/${prefix}` : ''}${getMetadata('base-site-path') || baseSitePath || ''}/`;
   const urlForCheck = stripQueryAndHash(link.href);
   const existingPage = queriedPages.find((page) => page.href === urlForCheck);
   if (existingPage) {
     callback(existingPage.ok
       ? link.href
-      : `${prefix ? `/${prefix}` : ''}/`);
+      : fallbackUrl);
     return;
   }
   fetch(urlForCheck, { method: 'HEAD' }).then((resp) => {
@@ -52,7 +75,7 @@ function handleEvent({ prefix, link, callback } = {}) {
     if (!resp.ok) throw new Error('request failed');
     callback(link.href);
   }).catch(() => {
-    callback(`${prefix ? `/${prefix}` : ''}/`);
+    callback(fallbackUrl);
   });
 }
 
@@ -71,6 +94,13 @@ const getLanguages = (links, languages, locales) => Array.from(links).map((link)
 });
 
 const getCurrentLanguage = (languagesList, path) => {
+  const config = getConfig();
+  const { languages, locale } = config;
+
+  if (!languages && locale?.base) {
+    const found = languagesList.find((lang) => lang.prefix === locale.base);
+    if (found) return found;
+  }
   const currentPath = path || window.location.pathname;
   const found = languagesList.find((lang) => {
     if (!lang.prefix) {
@@ -79,6 +109,25 @@ const getCurrentLanguage = (languagesList, path) => {
     return new RegExp(`^/${lang.prefix}(/|$)`).test(currentPath);
   });
   return found || languagesList[0];
+};
+
+const getCurrentPrefix = (filteredLanguages) => {
+  const config = getConfig();
+  if (!config.languages && config.locale?.prefix) {
+    const [localeKey] = config.locale.prefix.replace(/^\//, '').split('/');
+    return localeKey ? `/${localeKey}` : '';
+  }
+  const currentLangForPath = getCurrentLanguage(filteredLanguages);
+  return currentLangForPath?.prefix ? `/${currentLangForPath.prefix}` : '';
+};
+
+const buildLanguageSwitchUrl = (targetLang, filteredLanguages) => {
+  const { pathname, href, origin } = window.location;
+  const currentPrefix = getCurrentPrefix(filteredLanguages);
+  const hasPrefix = currentPrefix && pathname.startsWith(`${currentPrefix}/`);
+  const path = href.replace(origin + (hasPrefix ? currentPrefix : ''), '').replace('#langnav', '');
+  const newPath = targetLang.prefix ? `/${targetLang.prefix}${path}` : path;
+  return `${origin}${newPath}`;
 };
 
 const scrollSelectedIntoView = (selectedLangItem, languageList) => {
@@ -189,6 +238,17 @@ function escapeHTML(str) {
     .replace(/'/g, '&#039;');
 }
 
+export const getInternationalCookieValue = (prefix) => {
+  if (!prefix) return 'us';
+  const segments = prefix.split('/');
+  const cookieValue = segments.length > 1
+    ? segments[1]
+    : (getConfig().languages?.[prefix]?.region || prefix);
+
+  const regionMapping = { gb: 'uk', apac: 'au' };
+  return regionMapping[cookieValue] || cookieValue;
+};
+
 function renderLanguages({
   languageList,
   languagesList,
@@ -234,7 +294,7 @@ function renderLanguages({
           if (activeIndexRef.current === -1) activeIndexRef.current = idx;
         }
         const langLink = createTag('a', {
-          href: `${window.location.origin}${lang.prefix ? `/${lang.prefix}${window.location.pathname.replace(/^\/[a-zA-Z-]+/, '')}` : window.location.pathname.replace(/^\/[a-zA-Z-]+/, '')}`,
+          href: `${window.location.origin}${lang.prefix ? `/${lang.prefix}${window.location.pathname.replace(/^\/[a-zA-Z_-]+/, '')}` : window.location.pathname.replace(/^\/[a-zA-Z_-]+/, '')}`,
           class: 'language-link',
           role: 'option',
           'aria-selected': lang.name === currentLang.name ? 'true' : 'false',
@@ -244,15 +304,19 @@ function renderLanguages({
           <span class="language-name">${lang.name}</span>
           ${lang.name === currentLang.name ? CHECKMARK_SVG : ''}
         `;
-        langLink.addEventListener('click', (e) => {
+        langLink.addEventListener('click', async (e) => {
+          sendAnalyticsEvent(`language-switch:${lang.prefix || 'us'}`);
+          const config = getConfig();
+          if (config?.lingoProjectSuccessLogging === 'on') {
+            const startingPoint = `lingo-language-selector-starting-locale=${currentLang.name}`;
+            const destination = `lingo-language-selector-destination-locale=${lang.name}`;
+            const country = await getCountry();
+            window?.lana?.log(`Click: Language_Selector,${startingPoint},${destination}|locale:${config.locale.prefix?.replace('/', '') || 'us'}|country:${country}`, { sampleRate: 10, tags: 'lingo,lingo-language-selector-click', severity: 'i' });
+          }
           e.preventDefault();
-          const { pathname, href } = window.location;
-          const currentLangForPath = getCurrentLanguage(filteredLanguages);
-          const currentPrefix = currentLangForPath && currentLangForPath.prefix ? `/${currentLangForPath.prefix}` : '';
-          const hasPrefix = currentPrefix && pathname.startsWith(`${currentPrefix}/`);
-          const path = href.replace(window.location.origin + (hasPrefix ? currentPrefix : ''), '').replace('#langnav', '');
-          const newPath = lang.prefix ? `/${lang.prefix}${path}` : path;
-          const fullUrl = `${window.location.origin}${newPath}`;
+          const cookieValue = getInternationalCookieValue(lang.prefix);
+          setInternational(cookieValue);
+          const fullUrl = buildLanguageSwitchUrl(lang, filteredLanguages);
           handleEvent({
             prefix: lang.prefix,
             link: { href: fullUrl },
@@ -306,6 +370,7 @@ function setupDropdownEvents({
   let documentClickHandler = null;
 
   const closeDropdown = () => {
+    sendAnalyticsEvent('language-selector:dismissed', 'dismissal');
     isDropdownOpen = false;
     dropdown.style.display = 'none';
     selectedLangButton.setAttribute('aria-expanded', 'false');
@@ -373,6 +438,12 @@ function setupDropdownEvents({
   });
 
   async function openDropdown() {
+    sendAnalyticsEvent('language-selector:opened');
+    const config = getConfig();
+    if (config?.lingoProjectSuccessLogging === 'on') {
+      const country = await getCountry();
+      window?.lana?.log(`Open: Language_Selector|locale:${config.locale.prefix?.replace('/', '') || 'us'}|country:${country}`, { sampleRate: 10, tags: 'lingo,lingo-language-selector-open', severity: 'i' });
+    }
     isDropdownOpen = true;
     dropdown.style.display = 'block';
     selectedLangButton.setAttribute('aria-expanded', 'true');
@@ -458,13 +529,7 @@ function setupDropdownEvents({
     if (li) {
       const idx = Array.from(languageList.children).indexOf(li);
       const lang = filteredLanguages[idx];
-      const { pathname, href } = window.location;
-      const currentLangForPath = getCurrentLanguage(filteredLanguages);
-      const currentPrefix = currentLangForPath && currentLangForPath.prefix ? `/${currentLangForPath.prefix}` : '';
-      const hasPrefix = currentPrefix && pathname.startsWith(`${currentPrefix}/`);
-      const path = href.replace(window.location.origin + (hasPrefix ? currentPrefix : ''), '').replace('#langnav', '');
-      const newPath = lang.prefix ? `/${lang.prefix}${path}` : path;
-      const fullUrl = `${window.location.origin}${newPath}`;
+      const fullUrl = buildLanguageSwitchUrl(lang, filteredLanguages);
       const langLink = li.querySelector('a.language-link');
       if (langLink) langLink.href = fullUrl;
       handleEvent({

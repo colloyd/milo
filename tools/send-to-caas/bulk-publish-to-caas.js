@@ -189,7 +189,7 @@ const processData = async (data, accessToken) => {
   if (usePreview) {
     domain = `https://${previewHost}`;
   } else if (publishToFloodgate !== 'default') {
-    domain = `https://main--${repo}--${owner}.hlx.live`;
+    domain = `https://main--${repo}--${owner}.aem.live`;
   }
 
   for (const page of data) {
@@ -214,6 +214,8 @@ const processData = async (data, accessToken) => {
       setConfig({ bulkPublish: true, doc: dom, pageUrl, lastModified });
       const { caasMetadata, errors } = await getCardMetadata({
         prodUrl,
+        host,
+        repo,
         floodgatecolor: publishToFloodgate,
         languageFirst,
       });
@@ -516,13 +518,13 @@ helpButtons.forEach((btn) => {
         showAlert(`<p><b>Repo</b></p>
           <p>The <b>Repo</b> is the name of the repository where the content will be published.</p>
           <p>For example:</p>
-          <p><tt>https://main--<b>{repo}</b>--{owner}.hlx.live</tt>`);
+          <p><tt>https://main--<b>{repo}</b>--{owner}.aem.live</tt>`);
         break;
 
       case 'owner':
         showAlert(`<p><b>Repo Owner</b></p>
           <p>The <b>Repo Owner</b> is the owner of the repository where the content will be published. For example:</p>
-          <p><tt>https://main--{repo}--<b>{owner}</b>.hlx.live</tt>`);
+          <p><tt>https://main--{repo}--<b>{owner}</b>.aem.live</tt>`);
         break;
 
       case 'content-type-fallback':

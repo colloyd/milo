@@ -2,10 +2,10 @@
 import {
   loadBlock,
   decorateAutoBlock,
-  decorateLinks,
+  decorateLinksAsync,
   getMetadata,
   getConfig,
-  localizeLink,
+  localizeLinkAsync,
   loadStyle,
   loadScript,
   getFederatedUrl,
@@ -174,6 +174,7 @@ class Footer {
       error.tags = 'global-footer';
       error.url = url;
       error.errorType = 'e';
+      error.severity = 'error';
       lanaLog({ message: error.message, ...error });
       const { onFooterError } = getConfig();
       onFooterError?.(error);
@@ -186,7 +187,7 @@ class Footer {
     // they don't get decorated twice
     [regionParent, socialParent].forEach((parent) => parent?.replaceChildren());
 
-    decorateLinks(this.body);
+    await decorateLinksAsync(this.body);
 
     regionParent?.appendChild(region);
     socialParent?.appendChild(social);
@@ -272,6 +273,7 @@ class Footer {
         e: `${file.statusText} url: ${file.url}`,
         tags: 'global-footer',
         errorType: 'i',
+        severity: 'error',
       });
     }
     const content = await file.text();
@@ -320,7 +322,11 @@ class Footer {
     try {
       url = new URL(regionSelector.href);
     } catch (e) {
-      lanaLog({ message: `Could not create URL for region picker; href: ${regionSelector.href}`, tags: 'global-footer', errorType: 'e' });
+      lanaLog({
+        message: `Could not create URL for region picker; href: ${regionSelector.href}`,
+        tags: 'global-footer',
+        severity: 'critical',
+      });
       return this.elements.regionPicker;
     }
 
@@ -392,7 +398,7 @@ class Footer {
       // No hash -> region selector expands a dropdown
       regionPickerElem.setAttribute('aria-haspopup', 'true');
       regionPickerElem.href = '#'; // reset href value to not get treated as a fragment
-      regionSelector.href = localizeLink(regionSelector.href);
+      regionSelector.href = await localizeLinkAsync(regionSelector.href);
       decorateAutoBlock(regionSelector); // add fragment-specific class(es)
       this.elements.regionPicker.append(regionSelector); // add fragment after regionPickerElem
       const { default: initFragment } = await import('../fragment/fragment.js');
@@ -558,14 +564,23 @@ class Footer {
     }
   };
 }
+const footerInstances = new WeakMap();
 
 export default function init(block) {
   try {
+    if (footerInstances.has(block)) return footerInstances.get(block);
+
     const footer = new Footer({ block });
+    footerInstances.set(block, footer);
     if (isDarkMode()) block.classList.add('feds--dark');
     return footer;
   } catch (e) {
-    lanaLog({ message: 'Could not create footer', e });
+    lanaLog({
+      message: 'Could not create footer',
+      e,
+      tags: 'global-footer',
+      severity: 'critical',
+    });
     return null;
   }
 }

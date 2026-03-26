@@ -1,24 +1,26 @@
-import { STATUS, SEO_TITLES, SEO_IDS, SEO_DESCRIPTIONS } from './constants.js';
+import {
+  STATUS, SEO_TITLES, SEO_IDS, SEO_DESCRIPTIONS, SEO_SEVERITIES, SEO_CHECK_IDS,
+} from './constants.js';
 import getServiceConfig from '../../../utils/service-config.js';
 import { getConfig, updateConfig } from '../../../utils/utils.js';
 
 const KNOWN_BAD_URLS = ['news.adobe.com'];
-const SPIDY_URL_FALLBACK = 'https://spidy.corp.adobe.com';
+const SPIDY_URL_FALLBACK = 'https://spidy.gwp.corp.adobe.com';
 
 const linksCache = new Map();
 
-// Wait for footer using onFooterReady callback
-function waitForFooter() {
-  return new Promise((resolve) => {
-    const config = getConfig();
-    if (config.footerReady) {
-      resolve();
-      return;
-    }
+async function waitForFooter() {
+  const config = getConfig();
+  const footer = document.querySelector('footer');
 
+  if (config.footerReady || footer?.dataset.blockStatus === 'loaded') return;
+
+  await new Promise((resolve) => {
+    const timeout = setTimeout(resolve, 2000);
     const originalCallback = config.onFooterReady;
 
     config.onFooterReady = async () => {
+      clearTimeout(timeout);
       if (originalCallback) await originalCallback();
       await window.milo?.deferredPromise;
       config.footerReady = true;
@@ -46,7 +48,9 @@ export function checkH1s(area) {
   }
 
   return {
+    checkId: SEO_CHECK_IDS.h1Count,
     id: SEO_IDS.h1Count,
+    severity: SEO_SEVERITIES.h1Count,
     title: SEO_TITLES.h1Count,
     status,
     description,
@@ -70,7 +74,9 @@ export function checkTitle(area) {
   }
 
   return {
+    checkId: SEO_CHECK_IDS.title,
     id: SEO_IDS.title,
+    severity: SEO_SEVERITIES.title,
     title: SEO_TITLES.title,
     status,
     description,
@@ -106,7 +112,9 @@ export async function checkCanon(area) {
   }
 
   return {
+    checkId: SEO_CHECK_IDS.canonical,
     id: SEO_IDS.canonical,
+    severity: SEO_SEVERITIES.canonical,
     title: SEO_TITLES.canonical,
     status,
     description,
@@ -136,7 +144,9 @@ export async function checkDescription(area) {
   }
 
   return {
-    id: SEO_IDS.description,
+    checkId: SEO_CHECK_IDS.description,
+    id: SEO_IDS.description, // ASO compatibility
+    severity: SEO_SEVERITIES.description,
     title: SEO_TITLES.description,
     status,
     description,
@@ -157,7 +167,9 @@ export async function checkBody(area) {
   }
 
   return {
+    checkId: SEO_CHECK_IDS.bodySize,
     id: SEO_IDS.bodySize,
+    severity: SEO_SEVERITIES.bodySize,
     title: SEO_TITLES.bodySize,
     status,
     description,
@@ -179,7 +191,9 @@ export async function checkLorem(area) {
   }
 
   return {
+    checkId: SEO_CHECK_IDS.loremIpsum,
     id: SEO_IDS.loremIpsum,
+    severity: SEO_SEVERITIES.loremIpsum,
     title: SEO_TITLES.loremIpsum,
     status,
     description,
@@ -192,12 +206,17 @@ function makeGroups(arr, n = 20) {
   return Array.from({ length: batchSize }, (v, i) => arr.slice(i * size, i * size + size));
 }
 
-export function connectionError() {
+export function connectionError({ isVpnError = false }) {
+  const description = isVpnError
+    ? 'A VPN connection is required to use the link check service. Please turn on VPN and refresh the page.'
+    : 'Unable to connect to the link check service.';
   return {
+    checkId: SEO_CHECK_IDS.links,
     id: SEO_IDS.links,
+    severity: SEO_SEVERITIES.links,
     title: SEO_TITLES.links,
     status: STATUS.LIMBO,
-    description: 'A VPN connection is required to use the link check service. Please turn on VPN and refresh the page.',
+    description,
     details: { badLinks: [] },
   };
 }
@@ -205,10 +224,12 @@ export function connectionError() {
 async function spidyCheck(url) {
   try {
     const resp = await fetch(url, { method: 'HEAD' });
-    return !!resp.ok;
+    if (resp.ok) return { success: true };
+    return connectionError({ isVpnError: true });
   } catch (e) {
-    window.lana.log(`There was a problem connecting to the link check API ${url}. ${e}`, { tags: 'preflight', errorType: 'i' });
-    return false;
+    const errorMessage = 'Unable to connect to the link check service.';
+    window.lana.log(`${errorMessage} ${url}. ${e}`, { tags: 'preflight', errorType: 'i', severity: 'error' });
+    return connectionError({ isVpnError: false });
   }
 }
 
@@ -229,7 +250,7 @@ async function getSpidyResults(url, opts) {
       return acc;
     }, []);
   } catch (e) {
-    window.lana.log(`There was a problem connecting to the link check API ${url}/api/url-http-status. ${e}`, { tags: 'preflight', errorType: 'i' });
+    window.lana.log(`There was a problem connecting to the link check API ${url}/api/url-http-status. ${e}`, { tags: 'preflight', errorType: 'i', severity: 'error' });
     return [];
   }
 }
@@ -246,33 +267,22 @@ function compareResults(result, link) {
   return true;
 }
 
-export async function checkLinks({ area, urlHash, envName }) {
-  if (urlHash && linksCache.has(urlHash)) {
-    const cachedResult = linksCache.get(urlHash);
-    return {
-      ...cachedResult,
-      details: { ...cachedResult.details, linksChecked: true },
-    };
-  }
-
-  const { spidy, preflight } = await getServiceConfig(window.location.origin, envName);
-  const spidyUrl = spidy?.url || SPIDY_URL_FALLBACK;
-  const canSpidy = await spidyCheck(spidyUrl);
-  if (!canSpidy) return connectionError();
-
-  /**
-   * Find all links with an href.
-   * Filter out any local or existing preflight links.
-   * Set link to use hlx.live so the service can see them without auth
-   * */
+export async function validLinkFilter(area = document, envName = null) {
+  const { preflight } = await getServiceConfig(window.location.origin, envName);
   const knownBadUrls = preflight?.ignoreDomains
     ? preflight?.ignoreDomains.split(',').map((url) => url.trim())
     : KNOWN_BAD_URLS;
-
   const links = [...area.querySelectorAll('a')]
     .filter((link) => {
       if (
         link.href
+        // Added extra checks because Spidy misidentifies these URL schemes as faulty.
+        // Can be removed once we stop using Spidy.
+        && !link.href.includes('tel:')
+        && !link.href.includes('mailto:')
+        && !link.href.startsWith('#')
+        && !link.href.startsWith('https://#')
+        && !link.href.includes('bookmark://')
         && !link.href.includes('local')
         && !link.closest('.preflight')
         && !knownBadUrls.some((url) => url === link.hostname)
@@ -284,6 +294,29 @@ export async function checkLinks({ area, urlHash, envName }) {
       }
       return false;
     });
+  return links;
+}
+
+export async function checkLinks({ area, urlHash, envName }) {
+  if (urlHash && linksCache.has(urlHash)) {
+    const cachedResult = linksCache.get(urlHash);
+    return {
+      ...cachedResult,
+      details: { ...cachedResult.details, linksChecked: true },
+    };
+  }
+
+  const { spidy } = await getServiceConfig(window.location.origin, envName);
+  const spidyUrl = spidy?.url || SPIDY_URL_FALLBACK;
+  const spidyStatus = await spidyCheck(spidyUrl);
+  if (!spidyStatus.success) return spidyStatus;
+
+  /**
+   * Find all links with an href.
+   * Filter out any local or existing preflight links.
+   * Set link to use hlx.live so the service can see them without auth
+   * */
+  const links = await validLinkFilter(area, envName);
 
   const groups = makeGroups(links);
   const baseOpts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
@@ -317,7 +350,9 @@ export async function checkLinks({ area, urlHash, envName }) {
     : SEO_DESCRIPTIONS.links;
 
   const result = {
+    checkId: SEO_CHECK_IDS.links,
     id: SEO_IDS.links,
+    severity: SEO_SEVERITIES.links,
     title: SEO_TITLES.links,
     status,
     description,
@@ -327,6 +362,8 @@ export async function checkLinks({ area, urlHash, envName }) {
   if (urlHash) {
     linksCache.set(urlHash, result);
   }
+
+  window.dispatchEvent(new CustomEvent('preflightLinksComplete', { detail: { hasFailures: status === STATUS.FAIL } }));
 
   return result;
 }
