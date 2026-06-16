@@ -741,6 +741,18 @@ describe('global navigation', () => {
     });
   });
 
+  describe('Client whats new feature in global navigation', () => {
+    it('should append the feds-client-whatsnew div when whatsNew is on', async () => {
+      await createFullGlobalNavigation({ customConfig: { whatsNew: 'on' } });
+      expect(document.querySelector(selectors.topNav).querySelector('.feds-client-whatsnew')).to.exist;
+    });
+
+    it('should not append the feds-client-whatsnew div when whatsNew is not set', async () => {
+      await createFullGlobalNavigation({});
+      expect(document.querySelector(selectors.topNav).querySelector('.feds-client-whatsnew')).to.not.exist;
+    });
+  });
+
   describe('Product Entry CTA feature in global navigation', () => {
     it('should not append the feds-product-entry-cta class when product entry cta is disabled', async () => {
       document.head.innerHTML = '<meta name="product-entry-cta" content="off"/>';
@@ -798,21 +810,27 @@ describe('global navigation', () => {
     });
 
     it('should remove is-sticky class to localnav on scroll less than localnav placement', async () => {
+      let stickyCallback;
+      const OrigIO = window.IntersectionObserver;
+      window.IntersectionObserver = function IOmock(cb) { stickyCallback = cb; };
+      window.IntersectionObserver.prototype = { observe() {}, disconnect() {} };
       await createFullGlobalNavigation({ globalNavigation: gnavWithlocalNav });
+      stickyCallback([{ boundingClientRect: { top: 20 } }]);
+      window.IntersectionObserver = OrigIO;
       const localNav = document.querySelector(selectors.localNav);
-      sinon.stub(localNav, 'getBoundingClientRect').returns({ top: 20 });
-      window.dispatchEvent(new Event('scroll'));
-      const localNavAfterScroll = document.querySelector(selectors.localNav);
-      expect(localNavAfterScroll.classList.contains('is-sticky')).to.be.false;
+      expect(localNav.classList.contains('is-sticky')).to.be.false;
     });
 
     it('should add is-sticky class to localnav on scroll greater than localnav placement', async () => {
+      let stickyCallback;
+      const OrigIO = window.IntersectionObserver;
+      window.IntersectionObserver = function IOmock(cb) { stickyCallback = cb; };
+      window.IntersectionObserver.prototype = { observe() {}, disconnect() {} };
       await createFullGlobalNavigation({ globalNavigation: gnavWithlocalNav });
+      stickyCallback([{ boundingClientRect: { top: 0 } }]);
+      window.IntersectionObserver = OrigIO;
       const localNav = document.querySelector(selectors.localNav);
-      sinon.stub(localNav, 'getBoundingClientRect').returns({ top: 0 });
-      window.dispatchEvent(new Event('scroll'));
-      const localNavAfterScroll = document.querySelector(selectors.localNav);
-      expect(localNavAfterScroll.classList.contains('is-sticky')).to.be.true;
+      expect(localNav.classList.contains('is-sticky')).to.be.true;
     });
 
     it('should open both screen if localnav is present but shows only level 2 screen', async () => {

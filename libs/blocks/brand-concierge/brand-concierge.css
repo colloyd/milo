@@ -6,11 +6,23 @@
 }
 
 .brand-concierge {
+  --bc-header-font-size: 36px;
+  --bc-header-line-height: 45px;
+  --bc-header-subtitle-font-size: 16px;
+  --bc-header-subtitle-line-height: 24px;
+  --bc-header-margin-bottom: 32px;
+  --bc-header-padding: 0 24px;
   --bc-header-color: #131313;
+  --bc-card-font-size: 16px;
+  --bc-card-line-height: 24px;
   --bc-card-radius: 12px;
   --bc-card-border-color: rgba(0 0 0 / 12%);
   --bc-card-border-color-hover: rgba(0 0 0 / 22%);
   --bc-card-text-color: #292929;
+  --bc-tooltip-font-size: 14px;
+  --bc-tooltip-line-height: 21px;
+  --bc-input-font-size: 16px;
+  --bc-input-line-height: 1.5;
   --bc-input-radius: 26px;
   --bc-input-height: 52px;
   --bc-input-border-size: 2px;
@@ -39,6 +51,11 @@
 
 .brand-concierge.floating-button-only {
   padding: 0;
+
+  /* TODO: likely not all pages will be dark, this needs more granular control */
+  main:has(&) {
+    background: var(--s2a-color-gray-1000);
+  }
 }
 
 .bc-header {
@@ -52,14 +69,14 @@
 }
 
 .bc-header-title {
-  font-size: var(--type-heading-xl-size);
-  line-height: var(--type-heading-xl-lh);
+  font-size: var(--bc-header-font-size);
+  line-height: var(--bc-header-line-height);
   margin: 0;
 }
 
 .bc-header-subtitle {
-  font-size: var(--type-body-s-size);
-  line-height: var(--type-body-s-lh);
+  font-size: var(--bc-header-subtitle-font-size);
+  line-height: var(--bc-header-subtitle-line-height);
   margin: 0;
 }
 
@@ -97,9 +114,9 @@
   color: var(--bc-card-text-color);
   display: grid;
   grid-template-columns: 16px auto;
-  font-size: var(--type-body-s-size);
+  font-size: var(--bc-card-font-size);
   gap: 8px;
-  line-height: var(--type-body-s-lh);
+  line-height: var(--bc-card-line-height);
   margin: 0;
   padding: 12px 16px;
   text-align: left;
@@ -165,7 +182,7 @@
   align-items: center;
   user-select: none;
   align-self: start;
-  margin-right: -4px;
+  margin-right: -8px;
   margin-top: 10px;
   height: 32px;
   width: 32px;
@@ -204,8 +221,8 @@
   color: #fff;
   border-radius: 7px;
   box-shadow: 0 0 10px 0 rgba(0 0 0 / 25%);
-  font-size: var(--type-body-xs-size);
-  line-height: var(--type-body-xs-lh);
+  font-size: var(--bc-tooltip-font-size);
+  line-height: var(--bc-tooltip-line-height);
   left: 26px;
   padding: 5px 10px;
   position: absolute;
@@ -213,7 +230,7 @@
   transform: translateX(-50%);
   user-select: none;
   z-index: 4;
-} 
+}
 
 .bc-input-tooltip::before {
   border-top: 5px solid var(--bc-button-color);
@@ -248,8 +265,8 @@
   border: none;
   color: var(--bc-button-color);
   font-family: inherit;
-  font-size: var(--type-body-s-size);
-  line-height: 1.5;
+  font-size: var(--bc-input-font-size);
+  line-height: var(--bc-input-line-height);
   outline: none;
   width: 100%;
   resize: none;
@@ -333,7 +350,7 @@
   margin: var(--bc-floating-button-spacing) auto;
   max-height: var(--bc-floating-button-height);
   position: fixed;
-  transition: opacity 0.5s ease;
+  transition: opacity 0.25s ease;
   width: calc(100% - var(--bc-floating-button-spacing) * 2 - var(--bc-input-border-size) * 2);
   z-index: 4;
 }
@@ -344,8 +361,7 @@
 
 .bc-floating-button.floating-hidden {
   opacity: 0;
-  top: 100vh;
-  visibility: hidden;
+  pointer-events: none;
 }
 
 .bc-floating-button.floating-show {
@@ -370,12 +386,12 @@
 }
 
 .bc-floating-button:hover .bc-floating-button-container {
-  transition: all 0.3s ease;
+  transition: background 0.3s ease;
   background: #fff;
 }
 
 .bc-floating-button:hover::before {
-  transition: all 0.3s ease;
+  transition: border-color 0.3s ease;
   border-color: var(--bc-floating-button-border-color-hover);
 }
 
@@ -415,6 +431,8 @@
 .dialog-modal.bc-susi-modal .bc-susi-modal-title {
   padding: 20px var(--bc-susi-standard-padding) 12px;
   margin: 0;
+  font-size: 22px;
+  letter-spacing: -2%;
 }
 
 /* hero */
@@ -542,9 +560,18 @@
   #brand-concierge-modal.closing ~ .modal-curtain {
     animation: none;
   }
+
+  .brand-concierge.floating-input {
+    backdrop-filter: none;
+    background: #F8F8F8;
+  }
+
+  .brand-concierge.floating-input.dark {
+    background: #111;
+  }
 }
 
-#brand-concierge-modal  .dialog-close {
+#brand-concierge-modal .dialog-close {
   z-index: 2;
   background-image: url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTkuNzU0ODggMTMuMjQzMkMxMC4wNDIgMTIuOTQ0NCAxMC41MTY2IDEyLjkzNDYgMTAuODE0NSAxMy4yMjI3TDE1Ljk5OCAxOC4yMDlMMjEuMTk1MyAxMy4yMUMyMS40OTMyIDEyLjkyMTkgMjEuOTY3OCAxMi45MzE3IDIyLjI1NDkgMTMuMjMwNUMyMi41NDIgMTMuNTI3NCAyMi41MzMyIDE0LjAwMyAyMi4yMzQ0IDE0LjI5MDFMMTYuNTE3NiAxOS43OTAxQzE2LjIyNzUgMjAuMDcwMyAxNS43Njg2IDIwLjA3MDMgMTUuNDc4NSAxOS43OTAxTDkuNzc1MzkgMTQuMzAyOEM5LjYyMjA3IDE0LjE1NjMgOS41NDQ5MiAxMy45NTkgOS41NDQ5MiAxMy43NjI3QzkuNTQ0OTIgMTMuNTc1MiA5LjYxNDI2IDEzLjM4NzcgOS43NTQ4OCAxMy4yNDMyWiIgZmlsbD0iIzI5MjkyOSIvPgo8L3N2Zz4=');
   background-repeat: no-repeat;
@@ -556,12 +583,14 @@
   right: 16px;
 }
 
-#brand-concierge-modal  .dialog-close:focus-visible {
+#brand-concierge-modal .dialog-close:focus-visible {
   outline: 2px solid #5574F7;
   outline-offset: 2px;
   border-radius: 8px;
 }
 
+#brand-concierge-modal  .dialog-close::before,
+#brand-concierge-modal  .dialog-close::after,
 #brand-concierge-modal  .dialog-close svg {
   display: none;
 }
@@ -584,6 +613,7 @@
 
 .bc-modal-title {
   font-size: 16px;
+  letter-spacing: -0.9px;
   line-height: 32px;
   font-weight: 900;
   color: #000;
@@ -606,6 +636,226 @@
   height: calc(100% - var(--modal-header-height));
 }
 
+.brand-concierge.floating-input {
+  --bc-fi-bar-bg: rgba(248 248 248 / 65%);
+  --bc-fi-bar-border: rgba(0 0 0 / 12%);
+  --bc-fi-input-bg: rgba(255 255 255 / 85%);
+  --bc-fi-pill-bg: rgba(255 255 255 / 94%);
+  --bc-fi-pill-border: rgba(0 0 0 / 12%);
+  --bc-fi-text: #292929;
+  --bc-fi-pill-text: #292929;
+
+  backdrop-filter: blur(20px);
+  background: var(--bc-fi-bar-bg);
+  border: 1px solid var(--bc-fi-bar-border);
+  border-radius: 16px;
+  bottom: 16px;
+  box-shadow: 0 8px 32px rgba(0 0 0 / 12%);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  left: 50%;
+  padding: 16px;
+  position: fixed;
+  transform: translateX(-50%);
+  width: calc(100% - 32px);
+  z-index: 100;
+}
+
+.brand-concierge.floating-input .bc-input-field,
+.brand-concierge.floating-input .bc-prompt-cards {
+  margin: 0;
+}
+
+.brand-concierge.floating-input .bc-input-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.brand-concierge.floating-input .bc-input-field-container {
+  background: var(--bc-fi-input-bg);
+  margin-bottom: 0;
+  min-height: 48px;
+}
+
+.brand-concierge.floating-input .bc-input-field-container:hover,
+.brand-concierge.floating-input .bc-input-field-container:has(textarea:focus-visible) {
+  background: var(--bc-fi-input-bg);
+}
+
+.brand-concierge.floating-input .bc-input-tooltip {
+  color: #000;
+}
+
+.brand-concierge.floating-input.light .bc-input-tooltip {
+  color: #fff;
+}
+
+.brand-concierge.floating-input .bc-input-field::before {
+  backdrop-filter: none;
+  background:
+    linear-gradient(var(--bc-fi-input-bg), var(--bc-fi-input-bg)) padding-box,
+    linear-gradient(135deg, #7155FA, #D92361, #D73220) border-box;
+  border: 2px solid transparent;
+}
+
+.brand-concierge.floating-input .bc-input-field::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 30px;
+  background: linear-gradient(135deg, #7155FA, #D92361, #D73220);
+  filter: blur(15px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 0;
+}
+
+.brand-concierge.floating-input .bc-input-field:hover::after,
+.brand-concierge.floating-input .bc-input-field:has(textarea:focus-visible)::after {
+  opacity: 0.4;
+}
+
+.brand-concierge.floating-input .bc-textarea-grow-wrap {
+  overflow: hidden;
+}
+
+.brand-concierge.floating-input .bc-input-field-container textarea,
+.brand-concierge.floating-input .bc-textarea-grow-wrap::after {
+  max-height: 48px;
+  min-height: 48px;
+  overflow: hidden;
+  overflow-wrap: normal;
+  padding: 12px 0;
+  white-space: nowrap;
+}
+
+.brand-concierge.floating-input .bc-input-field-label {
+  align-self: center;
+  margin-top: 0;
+}
+
+.brand-concierge.floating-input .input-field-button {
+  align-self: center;
+  margin-bottom: 0;
+}
+
+.brand-concierge.floating-input .input-field-button,
+.brand-concierge.floating-input .input-field-button:hover {
+  background: transparent;
+  color: #0004;
+}
+
+.brand-concierge.floating-input .input-field-button:disabled {
+  color: #0004;
+}
+
+.brand-concierge.floating-input .input-field-button:not(:disabled) {
+  background: var(--bc-button-color);
+  color: #fff;
+}
+
+.brand-concierge.floating-input .bc-prompt-cards {
+  display: none;
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.brand-concierge.floating-input .prompt-card-button {
+  background: var(--bc-fi-pill-bg);
+  border-color: var(--bc-fi-pill-border);
+  border-radius: 26px;
+  flex: 0 0 auto;
+  height: 36px;
+  padding: 0;
+  white-space: nowrap;
+  width: auto;
+}
+
+.brand-concierge.floating-input .prompt-card-button:hover {
+  background: #F8F8F8;
+  border-color: rgba(0 0 0 / 22%);
+}
+
+.brand-concierge.floating-input .prompt-card-button:focus-visible {
+  outline-offset: -2px;
+}
+
+.brand-concierge.floating-input .prompt-card-text {
+  align-items: center;
+  color: var(--bc-fi-pill-text);
+  display: flex;
+  font-size: 14px;
+  gap: 6px;
+  line-height: 1.4;
+  padding: 4px 16px;
+  white-space: nowrap;
+}
+
+.brand-concierge.floating-input .prompt-card-text .card-icon {
+  display: none;
+}
+
+.brand-concierge.floating-input .prompt-card-text p {
+  color: var(--bc-fi-pill-text);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.brand-concierge.floating-input.dark {
+  --bc-fi-bar-bg: rgba(0 0 0 / 65%);
+  --bc-fi-bar-border: rgba(255 255 255 / 21%);
+  --bc-fi-input-bg: #131313;
+  --bc-fi-pill-bg: rgba(0 0 0 / 93%);
+  --bc-fi-pill-border: #8F8F8F;
+  --bc-fi-text: #DBDBDB;
+  --bc-fi-pill-text: var(--bc-fi-text);
+  --bc-button-color: var(--bc-fi-text);
+  --bc-fi-icon-color: #C6C6C6;
+  --bc-fi-input-hover-bg: #292929;
+  --bc-fi-pill-hover-bg: #222;
+}
+
+.brand-concierge.floating-input.dark .bc-input-field::before {
+  background:
+    linear-gradient(#111, #111) padding-box,
+    linear-gradient(135deg, #D73220, #F98F06, #7155FA) border-box;
+}
+
+.brand-concierge.floating-input.dark .bc-input-field-container textarea::placeholder {
+  color: rgba(219 219 219 / 70%);
+}
+
+.brand-concierge.floating-input.dark .bc-textarea-grow-wrap textarea {
+  color: var(--bc-fi-text);
+}
+
+.brand-concierge.floating-input.dark .input-field-button {
+  color: var(--bc-fi-icon-color);
+}
+
+.brand-concierge.floating-input.dark .input-field-button:disabled {
+  color: var(--bc-fi-icon-color);
+  pointer-events: none;
+}
+
+.brand-concierge.floating-input.dark .input-field-button:not(:disabled) {
+  color: var(--bc-fi-input-bg);
+}
+
+.brand-concierge.floating-input.dark .bc-input-field-container:hover,
+.brand-concierge.floating-input.dark .bc-input-field-container:has(textarea:focus-visible) {
+  background: var(--bc-fi-input-hover-bg);
+}
+
+.brand-concierge.floating-input.dark .prompt-card-button:hover {
+  border: 1px solid var(--bc-fi-icon-color);
+  background-color: var(--bc-fi-pill-hover-bg);
+}
+
   /* large mobile up */
 @media screen and (min-width: 600px) {
   .brand-concierge {
@@ -622,15 +872,22 @@
     animation: var(--bc-modal-animation-time) ease-in-out floating-button-in;
     animation-fill-mode: forwards;
   }
-  
+
   .bc-floating-button.modal-close {
     animation: var(--bc-modal-animation-time) ease-in-out floating-button-out;
     animation-fill-mode: forwards;
   }
-  
+
   /* hero */
   .brand-concierge.hero {
     padding: 80px 32px 24px;
+  }
+
+  .brand-concierge.floating-input {
+    bottom: 24px;
+    max-width: 1412px;
+    padding: 20px;
+    width: calc(100% - 48px);
   }
 }
 
@@ -750,6 +1007,14 @@
       height: calc(100vh - 32px);
     }
   }
+
+  .brand-concierge.floating-input .bc-prompt-cards {
+    display: flex;
+  }
+
+  .brand-concierge.floating-input .bc-input-field {
+    min-width: 340px;
+  }
 }
 
 /* tablet wide up */
@@ -765,6 +1030,11 @@
 
   #brand-concierge-modal.dialog-modal {
     max-width: 960px;
+  }
+
+  body:has(.brand-concierge.floating-input) #brand-concierge-modal.dialog-modal {
+    max-width: 1412px;
+    width: calc(100% - 48px);
   }
 }
 
@@ -798,6 +1068,11 @@
   .hero .bc-header-title {
     font-size: 44px;
     line-height: 55px;
+  }
+
+  .bc-susi-modal button.dialog-close {
+    right: 24px;
+    top: 24px;
   }
 
   #brand-concierge-modal.dialog-modal {
